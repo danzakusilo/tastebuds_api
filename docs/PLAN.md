@@ -1,7 +1,7 @@
 # Tastebuds API — Master Plan
 
 > Living document. Changes to scope or architecture go through a PR that edits this file.
-> Last revised: 2026-11-15.
+> Last revised: 2026-11-15 (post-review: D3, D4, D12 revised; D15, D16 added; phases re-ordered).
 
 ## 1. Vision
 
@@ -24,8 +24,8 @@ emphasis on **observability, iteration speed, agentic development, security, and
 |---|---|---|---|
 | D1 | Media scope | **All media**: film, TV, anime, games, books, music (albums/tracks/works), podcasts | Cross-media links are a headline feature |
 | D2 | Budget | **≤ $200/month** total (infra + LLM + embeddings) | Enforced in code by a cost meter, see §8.4 |
-| D3 | Domain / edge | **None yet.** Local k3d first; buy a cheap domain + Cloudflare free tier before public launch (Phase 5 gate) | |
-| D4 | Auth | **Spring Authorization Server** (in-house OIDC provider) as a separate deployable | Security boundary: separate image, DB schema, credentials |
+| D3 | Domain / edge | **None yet.** Local k3d first; buy a cheap domain before Phase 4 (identity needs it for verification email: SPF/DKIM/DMARC); Cloudflare free tier before public launch (Phase 6 gate) | Revised 2026-11-15: was "before launch", but email verification depends on it |
+| D4 | Auth | **Spring Authorization Server** (in-house OIDC provider) as a separate deployable, built in **Phase 4**, after the anonymous vertical slices | Security boundary: separate image, DB schema, credentials. Revised 2026-11-15: product value first; anon sessions carry Phases 1–3 |
 | D5 | Architecture | **Modular monolith** (Spring Modulith) + separate identity service. Core runs as `api` and `worker` roles from one image | Modules extractable later |
 | D6 | Observability backend | Self-hosted Grafana LGTM (Loki/Tempo/Mimir/Grafana) via OTel Collector; exporter switch for New Relic / Grafana Cloud | |
 | D7 | Retention | Raw telemetry **14 days**; LLM digests **90 days**; export on demand | |
@@ -33,20 +33,22 @@ emphasis on **observability, iteration speed, agentic development, security, and
 | D9 | Agent loop | Planner **Opus** → Implementer **Sonnet** → Reviewer **Opus**, max 3 review rounds, then human handoff; scope enforced by a hook | See `docs/agentic/WORKFLOW.md` |
 | D10 | Git | `main` branch, GitHub remote `danzakusilo/tastebuds_api`, CI on GitHub Actions | |
 | D11 | Persistence | PostgreSQL 17 + pgvector; **jOOQ** (typesafe SQL, no string-built queries) + Flyway | |
-| D12 | Messaging | Kafka (KRaft) + transactional outbox; idempotent consumers; DLQs | Strimzi on k8s |
+| D12 | Messaging | Kafka (KRaft); **Spring Modulith event publication registry** (JDBC) + event externalization to Kafka instead of a hand-rolled outbox; idempotent consumers; DLQs | Strimzi on k8s. Revised 2026-11-15: Modulith already ships the outbox |
+| D15 | Security baseline | **OWASP ASVS 5.0** Level 2 (+ selected L3 for auth/session) | Added 2026-11-15; ASVS 5.0 replaced 4.0 in May 2025 |
+| D16 | Deployment target | **Kubernetes from Phase 1**: k3d locally, Helm chart for core, CloudNativePG; the chart is the deployment contract from day one | Added 2026-11-15; was deferred to the launch phase |
 | D13 | Cache / limits | Redis (rate-limit buckets, anon sessions, hot caches) | |
 | D14 | Music data | MusicBrainz / ListenBrainz (open data). **No Spotify-derived ML features** (Spotify's terms forbid it) | |
 
 ## 3. Architecture
 
 ```
-                 ┌───────────── Cloudflare (Phase 5: DDoS, WAF, bot mgmt, TLS) ─────────────┐
+                 ┌───────────── Cloudflare (Phase 6: DDoS, WAF, bot mgmt, TLS) ─────────────┐
                  │                                                                          │
            ┌─────▼─────┐      Ingress (Envoy Gateway / NGINX): TLS, rate limits, size limits
            │  Ingress  │
            └──┬─────┬──┘
    OIDC/OAuth2│     │ REST /v1 (JWT bearer)
-      ┌───────▼──┐ ┌▼───────────────┐   outbox    ┌─────────┐   consume   ┌──────────────────┐
+      ┌───────▼──┐ ┌▼───────────────┐ events (1)  ┌─────────┐   consume   ┌──────────────────┐
       │ identity │ │ core (role=api)│────────────▶│  Kafka  │────────────▶│ core (role=worker)│
       │ (SAS)    │ └──┬──────┬──────┘             └─────────┘             └──┬───────┬───────┘
       └────┬─────┘    │      │                                               │       │
@@ -57,6 +59,7 @@ emphasis on **observability, iteration speed, agentic development, security, and
                  all pods ── OTLP ──▶ OTel Collector (PII scrub, tail sampling) ──▶ LGTM | New Relic
                  in-cluster traffic: Linkerd mTLS + default-deny NetworkPolicies
 ```
+(1) Spring Modulith event publication registry (transactional, in Postgres) externalized to Kafka (D12).
 
 ### 3.1 Gradle layout
 ```
@@ -82,7 +85,7 @@ docs/                        plan, ADRs, tasks, backlog, threat model, runbooks
 | `sessions` | Anonymous sessions, merge-on-signup |
 | `feedback` | Match feedback, experiment assignment |
 | `ops` | Telemetry digests, report export, admin |
-| `shared` | IDs, clock, errors, outbox (no business logic) |
+| `shared` | IDs, clock, errors (no business logic; event publication is Spring Modulith's, see D12) |
 
 Roles: `tastebuds.role=api|worker|all` (`all` for local dev). Kafka listeners and schedulers exist only in `worker`; HTTP controllers only in `api`.
 
@@ -169,7 +172,7 @@ Conventions: problem+json errors, cursor pagination, `Idempotency-Key` on writes
 
 ## 8. Security
 
-Target baseline: **OWASP ASVS 4.0 Level 2** with selected L3 controls for auth and session. Full threat model in `docs/security/THREAT_MODEL.md` (STRIDE per component; written in Phase 1).
+Target baseline: **OWASP ASVS 5.0 Level 2** (D15) with selected L3 controls for auth and session. Full threat model in `docs/security/THREAT_MODEL.md` (STRIDE per component; written in Phase 1).
 
 ### 8.1 Perimeter and transport
 - Cloudflare (DDoS L3–L7, WAF managed rules, bot fight mode) once a domain exists; origin accepts only Cloudflare IPs (+ authenticated origin pulls).
@@ -214,16 +217,34 @@ See `docs/agentic/WORKFLOW.md` (authoritative). Summary:
 
 ## 10. Infrastructure and budget (D2: ≤ $200/mo)
 
-| Item | Phase 0–4 (dev) | Public launch (est.) |
+| Item | Phase 0–5 (dev) | Public launch (est.) |
 |---|---|---|
-| Kubernetes | k3d local, $0 | Hetzner k3s, 3 small nodes + volumes, ~$40 |
+| Kubernetes | k3d local, $0 | Hetzner k3s, sized from the memory table below: **3 × 8 GB nodes** + volumes; price **TBD** (re-quote when buying, Hetzner list prices changed in 2025–26) |
 | Postgres/Kafka/Redis | in-cluster | in-cluster (Strimzi, CloudNativePG), $0 extra |
 | Observability | LGTM in-cluster | same, plus optional New Relic free tier |
-| Domain + Cloudflare | — | ~$1/mo + free tier |
+| Domain + Cloudflare | from Phase 4 (D3) | ~$1/mo + free tier |
 | LLM (Claude Haiku) + embeddings (Voyage) | capped $20 | capped **$120**, hard circuit breaker |
-| Headroom | | ~$35 |
+| Headroom | | whatever the nodes leave; if infra > $60, shrink the LLM cap rather than D2 |
 
-Pricing for LLM and embeddings gets re-verified in the task that introduces them; the budget is enforced by the cost meter, not by estimates.
+**Memory estimate at launch (requests, steady state).** The earlier "$40, 3 small nodes" figure was never computed; this is.
+
+| Workload | Replicas | Memory |
+|---|---|---|
+| core `api` | 2 | 2 × 768 MB |
+| core `worker` | 1 | 768 MB |
+| identity | 1 | 512 MB |
+| Postgres (CloudNativePG, + pgvector HNSW in RAM) | 1 + 1 standby | 2 × 1.5 GB |
+| Kafka (Strimzi, KRaft, 1 broker) + operator | 1 | 1.5 GB |
+| Redis | 1 | 256 MB |
+| LGTM (Loki, Tempo, Mimir, Grafana) + OTel Collector | 1 each | ~3.5 GB |
+| MinIO | 1 | 512 MB |
+| Platform: ingress, cert-manager, Linkerd, Kyverno, Argo CD, External Secrets | — | ~2.5 GB |
+| k3s system + kubelet reserve | 3 nodes | 3 × 600 MB |
+| **Total** | | **≈ 16 GB** → 24 GB cluster leaves room for one node failure only by shedding LGTM/Argo CD |
+
+Levers if it doesn't fit: Grafana Cloud free tier instead of in-cluster LGTM (−3.5 GB), Argo CD → Flux (−0.7 GB), single
+Postgres instance with WAL archiving instead of a standby. Pricing for LLM and embeddings gets re-verified in the task
+that introduces them; the budget is enforced by the cost meter, not by estimates.
 
 ## 11. Phases
 
@@ -234,40 +255,58 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 - ✅ Core service skeleton: roles, virtual threads, actuator on separate port, OTel (traces/metrics/logs over OTLP),
   wide-event filter, problem+json, deny-by-default security with hardened headers, Flyway baseline (pgvector).
 - ✅ Local dev: Testcontainers-backed `bootTestRun` (Postgres+pgvector); compose file for LGTM observability.
-  Redis and Kafka arrive with their first consumer (tasks 001 and the outbox task) so no idle infrastructure is wired.
+  Redis and Kafka arrive with their first consumer (task 001 and the event-externalization task) so no idle infrastructure is wired.
 - ✅ Distroless container image; verified end to end: request → wide event in Loki (structured attributes) + trace in Tempo.
 - ✅ Agentic workflow: CLAUDE.md, planner/implementer/reviewer agents, `/plan-task` + `/run-task` skills, scope-guard hook, backlog.
 - ✅ CI: build/test/coverage, image build + Trivy, gitleaks, CodeQL, task-scope job; Renovate; SECURITY.md, README.
-- k3d/Helm deferred to Phase 5 (no local k8s tooling needed until then).
-- **Exit:** `./gradlew check` green locally ✅ and in CI (after first push); a request produces one wide event plus a trace ✅.
+- 🔧 Hardening from the 2026-11-15 external review (pgvector search path, Flyway/DB roles, wide-event safety,
+  problem+json for security errors, forwarded headers, dependency locking, scope-guard fixes, LICENSE): see `docs/tasks/`.
+- **Exit:** `./gradlew check` green locally ✅ and in CI (after first push); a request produces one wide event plus a trace ✅;
+  hardening tasks merged.
 
-### Phase 1: Identity and security core
-- `services/identity` (SAS, OIDC, PKCE, Argon2id, MFA TOTP, refresh rotation); core as resource server.
-- Anonymous sessions (signed tokens, TTL, budgets) + rate limiting (Bucket4j/Redis, cost-weighted).
-- Flyway + jOOQ codegen pipeline, DB roles, outbox + Kafka publisher.
+> Phases revised 2026-11-15: Kubernetes moves to Phase 1 (D16), identity moves after the anonymous vertical slices
+> (D4), and the vibe axes get an offline validation gate before Phase 3 engineering.
+
+### Phase 1: Platform baseline and anonymous access
+- k3d cluster + Helm chart for core (`api`/`worker` deployments, probes, resources, security context), CloudNativePG,
+  Redis; `make`/script for one-command local cluster. CI renders and lints the chart (`helm lint`, kubeconform).
+- DB roles (`app_rw`, `migrator`) with Flyway as a separate Job; jOOQ codegen pipeline.
+- Anonymous sessions (signed tokens, TTL, budgets) + rate limiting (task 001, Bucket4j/Redis, cost-weighted).
+- Kafka (Strimzi on k3d) + Spring Modulith event externalization (D12).
 - Threat model v1, BOLA test harness, ZAP baseline in CI.
+- **Exit:** `helm install` on k3d serves `/v1/meta` with a wide event and trace in LGTM; anon session issued and rate-limited.
 
 ### Phase 2: Catalog and takes (vertical slice 1)
 - Providers: TMDB, IGDB, OpenLibrary, MusicBrainz, AniList; canonical media + dedup; search.
-- Takes CRUD (anon + user), merge-on-signup.
-- **Exit:** an anonymous user searches across kinds and records takes, fully traced.
+- Takes CRUD for anonymous sessions (user-owned takes arrive with Phase 4).
+- **Parallel: vibe-axis validation (gate for Phase 3).** Offline notebook/script: ~150 media across ≥5 kinds, LLM-scored
+  on the 16 axes with the draft rubric; measure inter-run stability (same model, repeated), agreement with a small
+  hand-labelled set, axis redundancy (correlation/PCA), and whether cross-kind nearest neighbours look sensible to a
+  human. Outcome: keep, merge or drop axes; rubric v1 frozen. No production code.
+- **Exit:** an anonymous user searches across kinds and records takes, fully traced; vibe-axis report committed under `docs/research/`.
 
 ### Phase 3: Vibe engine and matching (vertical slice 2, the core value)
+- **Entry gate:** the vibe-axis report recommends a rubric with acceptable stability and agreement.
 - Rubric v1 + anchors, catalog prior annotation (batch), take extraction worker, embeddings, pgvector HNSW.
 - Quick match (overlap-IDF) → deep match → explanations → partial reveal for anon.
 - Computed cross-media vibe links; cost meter + circuit breaker.
-- Offline eval harness (seeded reference profiles, clearly labelled).
+- Offline eval harness (reference profiles from openly licensed data only, clearly labelled; see risk register).
 
-### Phase 4: Social, imports, feedback, ops
+### Phase 4: Identity and accounts
+- Domain + transactional email (D3) set up first.
+- `services/identity` (SAS, OIDC, PKCE, Argon2id, email verification, MFA TOTP, refresh rotation); core as resource server.
+- Merge-on-signup (anon takes → account), GDPR export/delete.
+
+### Phase 5: Social, imports, feedback, ops
 - Follow, feed, comments, blocks/reports, moderation; explore tiers.
 - Imports (Letterboxd, Goodreads, Trakt, MAL, Steam, ListenBrainz) via Kafka with job status.
 - Match feedback + experiment assignment; user-proposed vibe links + voting.
 - LLM digests + report export; telemetry MCP server.
 
-### Phase 5: Production hardening and launch
-- Helm charts, Argo CD, Linkerd, NetworkPolicies, Kyverno, cosign, External Secrets, CloudNativePG, Strimzi.
-- Domain + Cloudflare; load tests (k6) with HPA/KEDA; chaos drills; runbooks; backups and restore test.
-- **Gate:** ASVS L2 checklist complete; SLO dashboards; budget alarms.
+### Phase 6: Production hardening and launch
+- Argo CD, Linkerd, NetworkPolicies, Kyverno, cosign, External Secrets, Strimzi production config.
+- Cloudflare; load tests (k6) with HPA/KEDA; chaos drills; runbooks; backups and restore test.
+- **Gate:** ASVS 5.0 L2 checklist complete; SLO dashboards; budget alarms; infra quote fits §10.
 
 ## 12. Risk register
 
@@ -282,6 +321,9 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 | Malicious imports | Streaming, caps, no URL fetches, sandboxed worker |
 | Sybil/fake profiles | Trust score, anomaly detection, feedback reputation |
 | Provider ToS | Attribution; no Spotify-derived ML |
+| Seed/eval data licensing | Research datasets (e.g. MovieLens) forbid redistribution and most non-research use: never seed public profiles from them; reference profiles are hand-built or from openly licensed data, and labelled as such |
+| Vibe axes don't carry signal | Offline validation gate before Phase 3 (§11); embedding-only recall still works if axes are cut |
+| Infra outgrows budget | Memory table in §10; Grafana Cloud free tier as the first lever |
 | Kafka delivery semantics | Outbox, idempotency keys, DLQ + replay |
 | Scope creep | Phase gates; task specs with non-goals; backlog instead of drive-by fixes |
 | Public repo leaks | gitleaks pre-commit + CI, External Secrets, no real config in git |

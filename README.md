@@ -14,7 +14,7 @@ observability, security, scalability and transparent agentic development.
 - **Vibe engine** (planned): LLM-extracted, media-agnostic vibe dimensions + embeddings in pgvector, explainable matches
 - **LLM-ready observability**: one schema-stable *wide event* per request, correlated with OpenTelemetry traces,
   exported over OTLP (Grafana LGTM locally); digests for analytics and incident work
-- **Security**: ASVS L2 target, deny-by-default, hardened headers, supply-chain scanning ([SECURITY.md](SECURITY.md))
+- **Security**: ASVS 5.0 L2 target, deny-by-default, hardened headers, supply-chain scanning ([SECURITY.md](SECURITY.md))
 - **Agentic workflow**: Opus plans → Sonnet implements → Opus reviews, with tool-enforced task scope
   ([workflow](docs/agentic/WORKFLOW.md))
 
@@ -39,6 +39,6 @@ Then open Grafana → Explore → Tempo/Loki and search for service `tastebuds-c
 | `services/core` | Core API + worker (modular monolith) |
 | `libs/observability` | Wide events, error fingerprints, OTLP log bridge |
 | `build-logic` | Gradle convention plugins and quality gates |
-| `deploy` | Local compose stack; Helm/k8s from Phase 5 |
+| `deploy` | Local compose stack; Helm/k8s from Phase 1 |
 | `docs` | [Plan](docs/PLAN.md), [tasks](docs/tasks), [backlog](docs/backlog), [wide event schema](docs/observability/WIDE_EVENT_SCHEMA.md) |
 | `.claude` | Agent roles, orchestration skills, scope-guard hook |
