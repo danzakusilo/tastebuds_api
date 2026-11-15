@@ -1,6 +1,6 @@
 # 002 — Harden the database wiring and make wide events fail-safe
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 0 (hardening from the 2026-11-15 external review, items 1–4)
 - **Planned by:** claude-opus-5-5 on 2026-11-15
 - **Depends on:** none

@@ -261,6 +261,7 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 - ✅ CI: build/test/coverage, image build + Trivy, gitleaks, CodeQL, task-scope job; Renovate; SECURITY.md, README.
 - 🔧 Hardening from the 2026-11-15 external review (pgvector search path, Flyway/DB roles, wide-event safety,
   problem+json for security errors, forwarded headers, dependency locking, scope-guard fixes, LICENSE): see `docs/tasks/`.
+  Progress: 002 (DB wiring + wide-event safety) ✅ done; 003, 004, 005 ready.
 - **Exit:** `./gradlew check` green locally ✅ and in CI (after first push); a request produces one wide event plus a trace ✅;
   hardening tasks merged.
 
