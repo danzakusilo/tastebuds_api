@@ -1,7 +1,6 @@
 package dev.danya.tastebuds.observability
 
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -39,9 +38,45 @@ class WideEventTest {
     }
 
     @Test
-    fun `rejects keys outside the naming convention`() {
-        assertThrows<IllegalArgumentException> { WideEvent("http").put("Bad Key", 1) }
-        assertThrows<IllegalArgumentException> { WideEvent("http").put("trailing.", 1) }
+    fun `drops and counts keys outside the naming convention instead of throwing`() {
+        val event =
+            WideEvent("http")
+                .put("Bad Key", 1)
+                .put("ok.first", 1)
+                .put("trailing.", 1)
+                .put("", 1)
+                .put("ok.second", 2)
+                .put("UPPER.case", 1)
+
+        assertEquals(mapOf("work.kind" to "http", "ok.first" to 1, "ok.second" to 2, "wide_event.invalid_keys" to 4L), event.snapshot())
+    }
+
+    @Test
+    fun `increment with an invalid key is dropped and counted`() {
+        val event = WideEvent("http").increment("Bad Key")
+
+        assertEquals(mapOf("work.kind" to "http", "wide_event.invalid_keys" to 1L), event.snapshot())
+    }
+
+    @Test
+    fun `increment continues from an existing Int value`() {
+        val event = WideEvent("http").put("n", 3).increment("n")
+
+        assertEquals(4L, event["n"])
+    }
+
+    @Test
+    fun `increment overwrites a non-numeric value`() {
+        val event = WideEvent("http").put("n", "text").increment("n", 2)
+
+        assertEquals(2L, event["n"])
+    }
+
+    @Test
+    fun `llm token counters are not redacted`() {
+        val event = WideEvent("http").put("llm.tokens_in", 120)
+
+        assertEquals(120, event["llm.tokens_in"])
     }
 
     @Test

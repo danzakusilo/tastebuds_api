@@ -13,12 +13,18 @@ spring:
       maximum-pool-size: ${DATABASE_POOL_SIZE:10}
       connection-timeout: 5000 # ms
       data-source-properties:
-        currentSchema: core
+        # `core` first so unqualified tables resolve to the app schema; `public` for extension types/operators (pgvector).
+        currentSchema: core,public
         # Hard cap on any single statement: a slow query must not exhaust the pool.
         options: "-c statement_timeout=5000"
   flyway:
     schemas: core
     default-schema: core
+    # Own connection, not the app pool: no statement_timeout (migrations may legitimately run long) and the
+    # schema-owning role (`migrator` in production, docs/PLAN.md §8.4). Falls back to the app credentials, which
+    # only works when the app user owns the schema (V2 revokes `app_rw` access to flyway_schema_history).
+    user: ${FLYWAY_USERNAME:${spring.datasource.username}}
+    password: ${FLYWAY_PASSWORD:${spring.datasource.password}}
   mvc:
     problemdetails:
       enabled: false # handled by ProblemDetailsAdvice

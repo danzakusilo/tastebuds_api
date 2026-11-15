@@ -7,7 +7,8 @@ package dev.danya.tastebuds.observability
  * when the unit of work ends. Field names follow `docs/observability/WIDE_EVENT_SCHEMA.md`.
  *
  * Values are sanitized on write: only scalars are kept, long strings are truncated and keys that look sensitive are
- * redacted, so an accidental `put("password", ...)` can never reach the logs.
+ * redacted, so an accidental `put("password", ...)` can never reach the logs. Invalid keys are dropped and counted in
+ * [INVALID_KEYS], never thrown: telemetry must not fail the work it observes.
  */
 class WideEvent(
     val kind: String,
@@ -22,7 +23,10 @@ class WideEvent(
         key: String,
         value: Any?,
     ): WideEvent {
-        require(KEY_PATTERN.matches(key)) { "Invalid wide event key '$key'" }
+        if (!KEY_PATTERN.matches(key)) {
+            fields[INVALID_KEYS] = ((fields[INVALID_KEYS] as? Number)?.toLong() ?: 0L) + 1
+            return this
+        }
         fields[key] = Redaction.sanitize(key, value)
         return this
     }
@@ -31,7 +35,7 @@ class WideEvent(
         key: String,
         by: Long = 1,
     ): WideEvent {
-        val current = fields[key] as? Long ?: 0L
+        val current = (fields[key] as? Number)?.toLong() ?: 0L
         return put(key, current + by)
     }
 
@@ -50,6 +54,7 @@ class WideEvent(
         const val DURATION_MS = "duration_ms"
         const val ERROR_CLASS = "error.class"
         const val ERROR_FINGERPRINT = "error.fingerprint"
+        const val INVALID_KEYS = "wide_event.invalid_keys"
 
         private val KEY_PATTERN = Regex("^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)*$")
         private val holder = ThreadLocal<WideEvent?>()

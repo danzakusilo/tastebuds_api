@@ -13,10 +13,12 @@ never (deprecate, then remove after 90 days, which is the digest retention).
 - Level: `ERROR` when `outcome=error`, else `INFO`.
 
 ## Rules
-- Keys: lowercase, dot-separated namespaces, `snake_case` segments (`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$`). Enforced.
+- Keys: lowercase, dot-separated namespaces, `snake_case` segments (`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$`). Invalid keys are dropped (never thrown) and counted in `wide_event.invalid_keys`.
 - Values: scalars only (string ≤ 256 chars, number, boolean, enum → lowercase name). Others become `unsupported:<Type>`.
-- No PII or secrets. Keys containing `password`, `secret`, `token`, `authorization`, `cookie`, `api_key`, `email`,
-  `phone`, `ssn` are force-redacted. No raw user input; no exception messages.
+- No PII or secrets. Keys containing `password`, `passwd`, `secret`, `token`, `authorization`, `cookie`, `api_key`,
+  `apikey`, `email`, `phone`, `ssn` are force-redacted (substring match: false positives are preferred over leaks). The
+  only exemptions are the exact keys `llm.tokens_in` and `llm.tokens_out`; add new ones in `Redaction.kt` deliberately.
+  No raw user input; no exception messages.
 - Low cardinality: route templates, not paths; IDs only when needed for investigation, and then opaque ones.
 - HTTP fields follow OpenTelemetry semantic conventions.
 
@@ -31,6 +33,7 @@ never (deprecate, then remove after 90 days, which is the digest retention).
 | `error.class` | string | lib / advice | Exception class name |
 | `error.fingerprint` | string | lib / advice | 12-hex hash of the root-cause type + top app frames; groups "the same bug" |
 | `app.role` | string | core | `api`, `worker`, `all` |
+| `wide_event.invalid_keys` | long | lib | Number of `put`/`increment` calls dropped for an invalid key (absent when 0) |
 
 ### HTTP (`work.kind = http`)
 | Field | Type | Description |

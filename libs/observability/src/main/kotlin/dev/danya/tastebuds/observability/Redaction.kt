@@ -4,12 +4,20 @@ internal object Redaction {
     const val REDACTED = "[REDACTED]"
     const val MAX_STRING_LENGTH = 256
 
-    private val sensitiveFragments =
+    private val sensitiveWords =
         listOf("password", "passwd", "secret", "token", "authorization", "cookie", "api_key", "apikey", "email", "phone", "ssn")
 
+    private val notSensitive = setOf("llm.tokens_in", "llm.tokens_out")
+
+    /**
+     * True when the lowercased key contains any sensitive word (substring match), unless the whole key is in
+     * [notSensitive]. Redaction must fail closed: false positives are preferred over leaks, so plurals and
+     * run-together names (`auth.tokens`, `auth.accesstoken`) are redacted. To exempt a new key, add its exact name to
+     * [notSensitive] deliberately.
+     */
     fun isSensitive(key: String): Boolean {
-        val normalized = key.lowercase()
-        return sensitiveFragments.any { normalized.contains(it) }
+        val lower = key.lowercase()
+        return lower !in notSensitive && sensitiveWords.any { it in lower }
     }
 
     fun sanitize(

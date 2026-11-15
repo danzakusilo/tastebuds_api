@@ -1,6 +1,6 @@
 # 002 — Harden the database wiring and make wide events fail-safe
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 0 (hardening from the 2026-11-15 external review, items 1–4)
 - **Planned by:** claude-opus-5-5 on 2026-11-15
 - **Depends on:** none
@@ -49,7 +49,8 @@ for extension types/operators (pgvector). Keep `options: "-c statement_timeout=5
 Add under `spring.flyway` (keep `schemas` and `default-schema`):
 ```yaml
     # Own connection, not the app pool: no statement_timeout (migrations may legitimately run long) and the
-    # schema-owning role (`migrator` in production, docs/PLAN.md §8.4). Falls back to the app credentials.
+    # schema-owning role (`migrator` in production, docs/PLAN.md §8.4). Falls back to the app credentials, which
+    # only works when the app user owns the schema (V2 revokes `app_rw` access to flyway_schema_history).
     user: ${FLYWAY_USERNAME:${spring.datasource.username}}
     password: ${FLYWAY_PASSWORD:${spring.datasource.password}}
 ```
@@ -93,13 +94,17 @@ CREATE ROLE tastebuds_app LOGIN PASSWORD 'test' IN ROLE app_rw;
   integration test can reference the user name.
 - KDoc on the class: app connects as non-superuser `tastebuds_app` (member of `app_rw`), Flyway as the container owner.
 
-### 5. Redaction by segment (`Redaction.isSensitive`)
+### 5. Redaction: substring match with an exact-key exemption (`Redaction.isSensitive`)
+*Amended 2026-11-15 after human review: segment matching (rounds 1–2) failed open for plurals (`auth.tokens`,
+`user.emails`) and run-together names (`auth.accesstoken`). Redaction must fail closed.*
+
 Signature unchanged: `fun isSensitive(key: String): Boolean`.
-- Split `key.lowercase()` on `.` and `_` into segments (drop empty ones).
-- Sensitive if any segment is in `setOf("password", "passwd", "secret", "token", "authorization", "cookie",
-  "apikey", "email", "phone", "ssn")`, or two consecutive segments are `api` then `key` (covers `api_key`).
-- Exact segment equality only: `tokens`, `tokenizer`, `phonetic`, `emails` are **not** sensitive. Document this in
-  the schema doc (rule below). KDoc on `isSensitive` states the rule and that plurals are deliberately not matched.
+- Keep the original substring rule: sensitive if `key.lowercase()` contains any of `password`, `passwd`, `secret`,
+  `token`, `authorization`, `cookie`, `api_key`, `apikey`, `email`, `phone`, `ssn` (the original list, unchanged).
+- Exception: keys in `private val notSensitive = setOf("llm.tokens_in", "llm.tokens_out")` (exact, whole-key equality)
+  are not sensitive. These are the counter fields reserved in `WIDE_EVENT_SCHEMA.md`. Nothing else is exempt; a new
+  counter whose name contains a sensitive word must be added to this set deliberately.
+- KDoc on `isSensitive` states the rule, that false positives are preferred over leaks, and where to add exemptions.
 
 ### 6. WideEvent never throws
 - New constant `const val INVALID_KEYS = "wide_event.invalid_keys"` in the companion object.
@@ -113,9 +118,10 @@ Signature unchanged: `fun isSensitive(key: String): Boolean`.
 
 ### 7. Schema doc (`WIDE_EVENT_SCHEMA.md`)
 - Rules, keys bullet: replace "Enforced." with "Invalid keys are dropped (never thrown) and counted in `wide_event.invalid_keys`."
-- Rules, redaction bullet: "Keys with a **segment** (split on `.` and `_`) equal to `password`, `passwd`, `secret`,
-  `token`, `authorization`, `cookie`, `apikey`, `email`, `phone`, `ssn`, or containing the segments `api`,`key`
-  consecutively, are force-redacted. Plurals and longer words (`llm.tokens_in`) are not."
+- Rules, redaction bullet: "No PII or secrets. Keys containing `password`, `passwd`, `secret`, `token`,
+  `authorization`, `cookie`, `api_key`, `apikey`, `email`, `phone`, `ssn` are force-redacted (substring match: false
+  positives are preferred over leaks). The only exemptions are the exact keys `llm.tokens_in` and `llm.tokens_out`;
+  add new ones in `Redaction.kt` deliberately. No raw user input; no exception messages."
 - Common table: add row `wide_event.invalid_keys` | long | lib | Number of `put`/`increment` calls dropped for an invalid key (absent when 0).
 
 ## Acceptance criteria
@@ -126,8 +132,8 @@ Signature unchanged: `fun isSensitive(key: String): Boolean`.
    returns `0` while on the app datasource it returns `5s`; `current_user` on it is the container owner.
 4. Migrations V1 and V2 apply on a fresh container; existing tests in `CoreApplicationIntegrationTest` and
    `ManagementEndpointsIntegrationTest` pass unchanged.
-5. `llm.tokens_in`, `llm.tokens_out` and the other non-sensitive examples in the tests are stored unredacted; every
-   previously redacted example (`user.email`, `auth.refresh_token`, `db.password_hash`) is still redacted.
+5. `llm.tokens_in` and `llm.tokens_out` are stored unredacted; every key the original substring rule redacted is still
+   redacted, including plurals and run-together names (`auth.tokens`, `user.emails`, `auth.accesstoken`).
 6. `WideEvent.put` and `increment` never throw for any key string; invalid keys are absent from `snapshot()` and
    `wide_event.invalid_keys` equals the number of rejected calls.
 7. `increment` on a key holding an `Int` continues the count (e.g. `put("n", 3)` then `increment("n")` → `4L`).
@@ -144,11 +150,14 @@ Signature unchanged: `fun isSensitive(key: String): Boolean`.
   - `flyway uses its own connection without the statement timeout` (AC3; query the Flyway DataSource with
     `JdbcClient.create(flyway.configuration.dataSource)`)
 - `RedactionTest` (new, unit): parameterised or table-driven
-  - `redacts keys with a sensitive segment`: `user.email`, `auth.refresh_token`, `db.password_hash`,
+  - `redacts keys containing a sensitive word`: `user.email`, `auth.refresh_token`, `db.password_hash`,
     `http.request.header.authorization`, `client.api_key`, `client.apikey`, `session.cookie`, `oauth.client_secret`,
     `db.passwd`, `user.phone`, `user.ssn`, `auth.token`
-  - `keeps keys whose segments only resemble sensitive words`: `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`,
-    `import.tokenizer`, `catalog.phonetic_title`, `api.keyboard_layout`, `http.route`
+  - `redacts plurals and run-together names`: `auth.tokens`, `user.emails`, `db.passwords`, `http.cookies`,
+    `client.api_keys`, `auth.accesstoken`, `auth.refreshtoken`, `user.userpassword`
+  - `exempts only the exact reserved llm token counters`: `llm.tokens_in`, `llm.tokens_out` not sensitive;
+    `llm.tokens_in.raw`, `x.llm.tokens_in`, `llm.tokens_total` sensitive
+  - `keeps ordinary keys`: `llm.cost_usd`, `http.route`, `api.keyboard_layout`, `db.query_count`
 - `WideEventTest` (update):
   - Replace `rejects keys outside the naming convention` (it asserts the old throwing contract, which this task
     removes) with `drops and counts keys outside the naming convention instead of throwing`: `"Bad Key"`, `"trailing."`,
@@ -167,3 +176,20 @@ Signature unchanged: `fun isSensitive(key: String): Boolean`.
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: CHANGES_REQUESTED
+1. AC3 test only asserts Flyway's `current_user` is not `tastebuds_app`; it must assert it equals the container owner.
+   Fix: inject the `PostgreSQLContainer` bean and `assertEquals(postgres.username, <flyway current_user>)`, removing the
+   `assertFalse(x == y)` pattern. (`DatabaseIntegrationTest.kt`, `flyway uses its own connection without the statement timeout`)
+   Resolution: fixed in round 2 (`assertEquals(postgres.username, ...)`).
+
+### Round 2: APPROVE
+none
+
+### Human review (after round 2): spec amended
+1. Segment-based redaction failed open for plurals and run-together names (`auth.tokens`, `user.emails`,
+   `auth.accesstoken`). §5 amended to substring matching with an exact-key exemption for `llm.tokens_in`/`llm.tokens_out`.
+2. Flyway fallback comment was misleading (fallback only works when the app user owns the schema). §2 amended.
+
+### Round 3: APPROVE
+none
