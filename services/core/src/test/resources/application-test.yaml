@@ -1,0 +1,15 @@
+# Tests never ship telemetry anywhere; wide events are asserted from the console output instead.
+management:
+  tracing:
+    export:
+      enabled: false
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  logging:
+    export:
+      otlp:
+        enabled: false
+  server:
+    port: 0

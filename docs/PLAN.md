@@ -1,0 +1,287 @@
+# Tastebuds API — Master Plan
+
+> Living document. Changes to scope or architecture go through a PR that edits this file.
+> Last revised: 2026-11-15.
+
+## 1. Vision
+
+Tastebuds helps people find new media to enjoy by connecting them with people who share their
+*vibe*, not just their watchlist. The defining feature is **cross-media vibe links**:
+*"this book reads like this Chopin nocturne sounds"*, *"this game feels like this film"*.
+
+The backend is an open-source portfolio piece meant to carry real (small, maybe larger later) traffic, with
+emphasis on **observability, iteration speed, agentic development, security, and scalability**.
+
+### Product pillars
+1. **Vibe space**: one media-agnostic representation in which a novel, an album, a game and a film can be compared.
+2. **Explainable matching**: every match and recommendation says *why* ("you both loved X for its slow, lush melancholy").
+3. **Low-friction entry**: anonymous users get value in under 60 seconds and keep their data when they sign up.
+4. **Feedback-driven iteration**: every match carries an algorithm version, and user feedback ("Good match?") drives offline evaluation and A/B tests.
+
+## 2. Decision log
+
+| # | Decision | Choice | Notes |
+|---|---|---|---|
+| D1 | Media scope | **All media**: film, TV, anime, games, books, music (albums/tracks/works), podcasts | Cross-media links are a headline feature |
+| D2 | Budget | **≤ $200/month** total (infra + LLM + embeddings) | Enforced in code by a cost meter, see §8.4 |
+| D3 | Domain / edge | **None yet.** Local k3d first; buy a cheap domain + Cloudflare free tier before public launch (Phase 5 gate) | |
+| D4 | Auth | **Spring Authorization Server** (in-house OIDC provider) as a separate deployable | Security boundary: separate image, DB schema, credentials |
+| D5 | Architecture | **Modular monolith** (Spring Modulith) + separate identity service. Core runs as `api` and `worker` roles from one image | Modules extractable later |
+| D6 | Observability backend | Self-hosted Grafana LGTM (Loki/Tempo/Mimir/Grafana) via OTel Collector; exporter switch for New Relic / Grafana Cloud | |
+| D7 | Retention | Raw telemetry **14 days**; LLM digests **90 days**; export on demand | |
+| D8 | API style | REST + OpenAPI 3.1 (generated, committed, diff-checked in CI) under `/v1`; SSE for live feed later | |
+| D9 | Agent loop | Planner **Opus** → Implementer **Sonnet** → Reviewer **Opus**, max 3 review rounds, then human handoff; scope enforced by a hook | See `docs/agentic/WORKFLOW.md` |
+| D10 | Git | `main` branch, GitHub remote `danzakusilo/tastebuds_api`, CI on GitHub Actions | |
+| D11 | Persistence | PostgreSQL 17 + pgvector; **jOOQ** (typesafe SQL, no string-built queries) + Flyway | |
+| D12 | Messaging | Kafka (KRaft) + transactional outbox; idempotent consumers; DLQs | Strimzi on k8s |
+| D13 | Cache / limits | Redis (rate-limit buckets, anon sessions, hot caches) | |
+| D14 | Music data | MusicBrainz / ListenBrainz (open data). **No Spotify-derived ML features** (Spotify's terms forbid it) | |
+
+## 3. Architecture
+
+```
+                 ┌───────────── Cloudflare (Phase 5: DDoS, WAF, bot mgmt, TLS) ─────────────┐
+                 │                                                                          │
+           ┌─────▼─────┐      Ingress (Envoy Gateway / NGINX): TLS, rate limits, size limits
+           │  Ingress  │
+           └──┬─────┬──┘
+   OIDC/OAuth2│     │ REST /v1 (JWT bearer)
+      ┌───────▼──┐ ┌▼───────────────┐   outbox    ┌─────────┐   consume   ┌──────────────────┐
+      │ identity │ │ core (role=api)│────────────▶│  Kafka  │────────────▶│ core (role=worker)│
+      │ (SAS)    │ └──┬──────┬──────┘             └─────────┘             └──┬───────┬───────┘
+      └────┬─────┘    │      │                                               │       │
+           │       Postgres  Redis                                    LLM / embeddings / catalog APIs
+      Postgres     +pgvector                                          (Claude Haiku, Voyage, TMDB,
+      (identity                                                        IGDB, OpenLibrary, MusicBrainz…)
+       schema)
+                 all pods ── OTLP ──▶ OTel Collector (PII scrub, tail sampling) ──▶ LGTM | New Relic
+                 in-cluster traffic: Linkerd mTLS + default-deny NetworkPolicies
+```
+
+### 3.1 Gradle layout
+```
+build-logic/                 convention plugins (kotlin, spring-service, quality)
+libs/observability/          wide events, MDC/trace correlation, log schema, PII redaction helpers
+libs/security-common/        (Phase 1) shared security primitives (headers, problem+json for authN errors)
+services/core/               modular monolith: api + worker roles
+services/identity/           (Phase 1) Spring Authorization Server
+deploy/                      compose (dev), helm charts, k3d config, otel-collector config
+docs/                        plan, ADRs, tasks, backlog, threat model, runbooks
+```
+
+### 3.2 Core modules (Spring Modulith; boundaries verified in tests)
+| Module | Responsibility |
+|---|---|
+| `catalog` | Canonical `Media`, external IDs, search, ingest from providers, dedup |
+| `takes` | User opinions: sentiment, liked/disliked aspects, free text |
+| `vibes` | Aspect extraction (LLM), vibe vectors (media + user), cross-media links |
+| `matching` | Candidate generation (ANN), scoring, explanations, explore tiers |
+| `recs` | Media recommendations from matches |
+| `social` | Follows, feed, comments, blocks, reports |
+| `imports` | CSV/API imports (Letterboxd, Goodreads, Trakt, MAL, Steam, ListenBrainz) |
+| `sessions` | Anonymous sessions, merge-on-signup |
+| `feedback` | Match feedback, experiment assignment |
+| `ops` | Telemetry digests, report export, admin |
+| `shared` | IDs, clock, errors, outbox (no business logic) |
+
+Roles: `tastebuds.role=api|worker|all` (`all` for local dev). Kafka listeners and schedulers exist only in `worker`; HTTP controllers only in `api`.
+
+### 3.3 Kafka topics (initial)
+`catalog.media-ingested`, `takes.take-upserted`, `vibes.vectors-updated`, `matching.recompute-requested`,
+`imports.job-submitted`, `social.activity`, `feedback.submitted` + a `.dlq` per consumer group.
+Keys = aggregate ID (ordering per entity). Schemas: JSON Schema, versioned, contract-tested.
+
+## 4. Domain model (sketch)
+
+- **Media**(id, kind ∈ {FILM, TV, ANIME, GAME, BOOK, MUSIC_ALBUM, MUSIC_TRACK, MUSIC_WORK, PODCAST}, title, year, creators[], external_ids{}, description, catalog_vibe)
+- **User**(id, handle, visibility, trust_score) — identity lives in `identity`; core holds a projection
+- **AnonSession**(id, expires_at, budget_remaining)
+- **Take**(id, owner(user|anon), media_id, sentiment −2..+2, liked_aspects[], disliked_aspects[], text?, extracted_aspects, vibe_vector, extraction_status)
+- **VibeLink**(media_a, media_b, score, shared_dims[], source ∈ {COMPUTED, USER}, votes) — user-proposed links are first-class content
+- **Match**(user_a, user_b, score, tier, explanation, algo_version, computed_at)
+- **Follow**, **Comment**(on Take), **FeedbackEvent**(match_id, verdict, reason?)
+- **ImportJob**(id, owner, source, status, stats)
+
+## 5. The vibe engine (cross-media core)
+
+### 5.1 Two representations per take and per media
+1. **Interpretable vibe dimensions** (~16 scalar axes, media-agnostic, each −1..+1):
+   `energy`, `tempo/pacing`, `valence (bleak↔joyful)`, `tension`, `melancholy`, `warmth/intimacy`, `density/complexity`,
+   `texture (sparse↔lush)`, `structure (linear↔fragmented)`, `realism↔fantastical`, `scale (intimate↔epic)`, `humor`,
+   `romanticism`, `strangeness`, `nostalgia`, `craft-focus (form over content)`.
+   Scored by the LLM against a fixed rubric, with **anchor examples per media kind**: what "lush texture" means for a
+   symphony, a novel's prose, a game's art direction. Used for explanations and cross-media bridging.
+2. **Dense embedding** (Voyage, ~1024-d) of a normalized "vibe statement" generated from the aspects. Used for recall (pgvector HNSW).
+
+### 5.2 Media vibe
+- **Catalog prior:** one LLM annotation per media from its description, genres and credits (cached forever, re-run only on rubric version bump). Gives every media a vibe before anyone rates it, which solves cold start.
+- **Crowd posterior:** a Bayesian blend of the prior with users' take-level vibes, weighted by take count and rater trust.
+
+### 5.3 User vibe profile
+- Liked-vibe centroid(s) (k small clusters, since people have several tastes) + disliked-vibe centroid + per-kind breakdown.
+
+### 5.4 Matching score (v1)
+```
+score(a,b) = w1·overlap_idf(a,b)          # shared media weighted by rarity (IDF), sentiment-aligned
+           + w2·vibe_sim(liked_a, liked_b) # cross-media: works with zero shared titles
+           + w3·aspect_agreement(shared)   # same media, same reasons
+           − w4·dislike_conflict(a,b)
+```
+- Candidate generation: ANN over user profile vectors → top-K → exact re-rank → explanation builder.
+- Tiers: **safe** (high score, high confidence), **likely** (high score, lower confidence), **possible** (moderate score, high novelty = vibe overlap in kinds the user hasn't explored).
+- Every `Match` stores `algo_version`; experiments assign users to versions deterministically.
+
+### 5.5 Cross-media links
+- Computed: nearest neighbours in vibe space restricted to a *different* `kind`, keeping only pairs whose shared dims are strong (explainable).
+- User-proposed: "X reads like Y", with an optional reason; votes and trust weighting; moderated.
+- Surfaced on media pages, in explanations, and in "possible" tier recs.
+
+### 5.6 LLM safety and cost
+- User text is **data**: strict JSON-schema structured output, no tools, rubric in the system prompt, output validated and clamped.
+- Async only (Kafka worker), never on the request path. Cache keyed by hash(normalized text + rubric version).
+- Per-anon-session and per-user daily budgets; a global monthly cost meter with a circuit breaker (degrades to overlap + catalog-prior matching).
+- Batch API for catalog annotation backfills.
+
+## 6. API surface (v1, indicative)
+
+Public/anonymous: `POST /v1/sessions/anonymous`, `GET /v1/media/search?q=&kind=`, `GET /v1/media/{id}`,
+`PUT /v1/me/takes/{mediaId}`, `POST /v1/matches/quick`, `GET /v1/matches/{id}` (partially redacted for anon),
+`POST /v1/imports` (anon: temporary, TTL).
+Authenticated: `GET /v1/feed`, `GET /v1/explore?tier=`, `POST /v1/follows/{userId}`, `POST /v1/takes/{id}/comments`,
+`POST /v1/matches/{id}/feedback`, `POST /v1/vibe-links`, `GET /v1/me/export`, `DELETE /v1/me`.
+Admin: `GET /v1/admin/reports`, `POST /v1/admin/reports/export`.
+Conventions: problem+json errors, cursor pagination, `Idempotency-Key` on writes, ETags on reads.
+
+## 7. Observability
+
+- **Signals:** OpenTelemetry traces, metrics and logs (Spring Boot OTel starter + Micrometer), exported over OTLP.
+- **Wide events:** exactly one structured `wide_event` log line per HTTP request / Kafka message / job, with a stable schema
+  (`docs/observability/WIDE_EVENT_SCHEMA.md`): trace_id, route, status, duration_ms, principal_tier (anon|user|admin),
+  module, outcome, error.class, error.fingerprint, algo_version, llm.tokens, llm.cost_usd, db.query_count, rate_limit.remaining …
+  Business fields are added with `WideEvent.current().put(...)` anywhere in the call path.
+- **Log schema:** JSON (ECS-compatible), no free-form interpolated secrets/PII. A redaction allow-list is applied in the app and again in the collector.
+- **LLM digests** (`ops` module, worker role): scheduled hourly and daily, plus on demand. Queries Loki/Tempo/Mimir and emits
+  compact Markdown + JSONL: top error fingerprints with sample traces, p50/p95/p99 regressions vs baseline, Kafka lag,
+  LLM spend, matching-quality metrics (feedback approval rate per algo_version). Stored in S3-compatible storage
+  (MinIO in-cluster) with 90-day lifecycle; `POST /v1/admin/reports/export` bundles a time range.
+- **MCP server (Phase 4):** read-only telemetry/digest queries for Claude Code during incident work.
+- **SLOs:** API availability 99.5%, p95 < 300 ms for reads; burn-rate alerts.
+
+## 8. Security
+
+Target baseline: **OWASP ASVS 4.0 Level 2** with selected L3 controls for auth and session. Full threat model in `docs/security/THREAT_MODEL.md` (STRIDE per component; written in Phase 1).
+
+### 8.1 Perimeter and transport
+- Cloudflare (DDoS L3–L7, WAF managed rules, bot fight mode) once a domain exists; origin accepts only Cloudflare IPs (+ authenticated origin pulls).
+- TLS 1.3 only at the edge, HSTS preload, cert-manager + Let's Encrypt.
+- Linkerd mTLS between all pods (covers MITM inside the cluster); default-deny NetworkPolicies; egress allow-list for external APIs.
+
+### 8.2 Abuse and DoS at the app layer
+- Bucket4j + Redis token buckets per IP, per anon session and per user, **cost-weighted** per endpoint (deep match ≫ search).
+- Request size/time limits at ingress and in the app; bounded pagination; query timeouts in Postgres (`statement_timeout`).
+- Anti-enumeration: uniform auth responses, opaque IDs (UUIDv7 externally only, never sequential).
+- Scraping protection for profiles and matches: per-viewer view quotas; partial reveal computed on the server.
+
+### 8.3 AuthN / AuthZ (identity service)
+- Spring Authorization Server: OIDC, Authorization Code + PKCE only (no implicit, no password grant).
+- Argon2id passwords, breached-password check (HIBP k-anonymity), passkeys (WebAuthn) + TOTP MFA.
+- Short-lived access JWTs (5 min, ES256, rotating keys via JWKS), rotating refresh tokens with reuse detection → family revocation.
+- Login throttling and lockout with exponential backoff, plus credential-stuffing detection (per-IP/ASN velocity).
+- Core is an OAuth2 resource server; method-level authorization; object ownership checks tested per endpoint (BOLA/IDOR tests).
+
+### 8.4 Data and injection
+- jOOQ / bind parameters only; ArchUnit rule bans `String`-built SQL APIs; Semgrep rules in CI.
+- Least-privilege DB roles: `app_rw` (no DDL), `migrator` (DDL, used only by the Flyway job), `readonly` (digests).
+- Input validation at the edge (Bean Validation), output encoding, strict CORS allow-list, security headers (CSP, nosniff, frame-deny, referrer-policy).
+- Imports: streaming CSV parser, size/row caps, formula-injection neutralization on export, no URL fetches (no SSRF surface).
+- Encryption at rest (volume level) + column-level encryption for email/MFA secrets; GDPR export/delete; audit log (append-only).
+- LLM: prompt-injection containment (§5.6); cost meter as DoS defence.
+
+### 8.5 Supply chain and runtime
+- Renovate, Gradle dependency verification + locking, Trivy (fs + image), CodeQL, gitleaks (pre-commit + CI), CycloneDX SBOM.
+- Distroless/Chainguard JRE base images, non-root, read-only root FS, seccomp `RuntimeDefault`, Pod Security `restricted`.
+- cosign-signed images; Kyverno admission policy verifies signatures.
+- Secrets: External Secrets / SOPS; nothing secret in git (public repo).
+- DAST: OWASP ZAP baseline against an ephemeral environment in CI.
+
+## 9. Agentic development workflow
+
+See `docs/agentic/WORKFLOW.md` (authoritative). Summary:
+1. **Plan** (Opus, `planner` agent): writes `docs/tasks/NNN-slug.md` from `TEMPLATE.md`: goal, non-goals, **allowed paths**, acceptance criteria, required tests, coverage gate.
+2. **Implement** (Sonnet, `implementer` agent): works only within allowed paths. A PreToolUse hook (`.claude/hooks/scope-guard.sh`) **blocks** edits outside them. Unrelated findings go to `docs/backlog/`, never fixed in place.
+3. **Review** (Opus, `reviewer` agent): checks the diff against the spec, scope, tests and coverage; returns `APPROVE` or `CHANGES_REQUESTED` with numbered items. Max 3 rounds, then handoff to the human with a summary.
+4. **Gate:** `./gradlew check` (tests, Kover, ktlint, detekt, ArchUnit/Modulith) must pass; the same command runs in CI.
+
+## 10. Infrastructure and budget (D2: ≤ $200/mo)
+
+| Item | Phase 0–4 (dev) | Public launch (est.) |
+|---|---|---|
+| Kubernetes | k3d local, $0 | Hetzner k3s, 3 small nodes + volumes, ~$40 |
+| Postgres/Kafka/Redis | in-cluster | in-cluster (Strimzi, CloudNativePG), $0 extra |
+| Observability | LGTM in-cluster | same, plus optional New Relic free tier |
+| Domain + Cloudflare | — | ~$1/mo + free tier |
+| LLM (Claude Haiku) + embeddings (Voyage) | capped $20 | capped **$120**, hard circuit breaker |
+| Headroom | | ~$35 |
+
+Pricing for LLM and embeddings gets re-verified in the task that introduces them; the budget is enforced by the cost meter, not by estimates.
+
+## 11. Phases
+
+Each phase ends with a demoable, observable, secured increment. Exit criteria are checked by the reviewer agent.
+
+### Phase 0: Foundations *(done 2026-11-15, CI pending first push)*
+- ✅ Gradle multi-module + convention plugins; quality gates (Kover 70% floor, ktlint, detekt, ArchUnit, Modulith verification).
+- ✅ Core service skeleton: roles, virtual threads, actuator on separate port, OTel (traces/metrics/logs over OTLP),
+  wide-event filter, problem+json, deny-by-default security with hardened headers, Flyway baseline (pgvector).
+- ✅ Local dev: Testcontainers-backed `bootTestRun` (Postgres+pgvector); compose file for LGTM observability.
+  Redis and Kafka arrive with their first consumer (tasks 001 and the outbox task) so no idle infrastructure is wired.
+- ✅ Distroless container image; verified end to end: request → wide event in Loki (structured attributes) + trace in Tempo.
+- ✅ Agentic workflow: CLAUDE.md, planner/implementer/reviewer agents, `/plan-task` + `/run-task` skills, scope-guard hook, backlog.
+- ✅ CI: build/test/coverage, image build + Trivy, gitleaks, CodeQL, task-scope job; Renovate; SECURITY.md, README.
+- k3d/Helm deferred to Phase 5 (no local k8s tooling needed until then).
+- **Exit:** `./gradlew check` green locally ✅ and in CI (after first push); a request produces one wide event plus a trace ✅.
+
+### Phase 1: Identity and security core
+- `services/identity` (SAS, OIDC, PKCE, Argon2id, MFA TOTP, refresh rotation); core as resource server.
+- Anonymous sessions (signed tokens, TTL, budgets) + rate limiting (Bucket4j/Redis, cost-weighted).
+- Flyway + jOOQ codegen pipeline, DB roles, outbox + Kafka publisher.
+- Threat model v1, BOLA test harness, ZAP baseline in CI.
+
+### Phase 2: Catalog and takes (vertical slice 1)
+- Providers: TMDB, IGDB, OpenLibrary, MusicBrainz, AniList; canonical media + dedup; search.
+- Takes CRUD (anon + user), merge-on-signup.
+- **Exit:** an anonymous user searches across kinds and records takes, fully traced.
+
+### Phase 3: Vibe engine and matching (vertical slice 2, the core value)
+- Rubric v1 + anchors, catalog prior annotation (batch), take extraction worker, embeddings, pgvector HNSW.
+- Quick match (overlap-IDF) → deep match → explanations → partial reveal for anon.
+- Computed cross-media vibe links; cost meter + circuit breaker.
+- Offline eval harness (seeded reference profiles, clearly labelled).
+
+### Phase 4: Social, imports, feedback, ops
+- Follow, feed, comments, blocks/reports, moderation; explore tiers.
+- Imports (Letterboxd, Goodreads, Trakt, MAL, Steam, ListenBrainz) via Kafka with job status.
+- Match feedback + experiment assignment; user-proposed vibe links + voting.
+- LLM digests + report export; telemetry MCP server.
+
+### Phase 5: Production hardening and launch
+- Helm charts, Argo CD, Linkerd, NetworkPolicies, Kyverno, cosign, External Secrets, CloudNativePG, Strimzi.
+- Domain + Cloudflare; load tests (k6) with HPA/KEDA; chaos drills; runbooks; backups and restore test.
+- **Gate:** ASVS L2 checklist complete; SLO dashboards; budget alarms.
+
+## 12. Risk register
+
+| Risk | Mitigation |
+|---|---|
+| Cold start (few users) | Catalog vibe priors; aspect-level matching; labelled reference profiles; show confidence |
+| Popularity bias | IDF weighting; blockbuster damping |
+| O(n²) matching | ANN candidates + re-rank; incremental recompute from events |
+| LLM cost-DoS | Async only, budgets, cache, circuit breaker |
+| Prompt injection | Data-only prompts, schema-constrained output, no tools |
+| Sensitive inference from taste data | Opt-in visibility, server-side redaction, view quotas, GDPR delete |
+| Malicious imports | Streaming, caps, no URL fetches, sandboxed worker |
+| Sybil/fake profiles | Trust score, anomaly detection, feedback reputation |
+| Provider ToS | Attribution; no Spotify-derived ML |
+| Kafka delivery semantics | Outbox, idempotency keys, DLQ + replay |
+| Scope creep | Phase gates; task specs with non-goals; backlog instead of drive-by fixes |
+| Public repo leaks | gitleaks pre-commit + CI, External Secrets, no real config in git |

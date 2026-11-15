@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":semanticCommits"],
+  "labels": ["dependencies"],
+  "vulnerabilityAlerts": { "labels": ["security"] },
+  "packageRules": [
+    {
+      "description": "OpenTelemetry instrumentation must match the OTel SDK managed by Spring Boot; update together with Boot.",
+      "matchPackageNames": ["io.opentelemetry.instrumentation:**"],
+      "enabled": false
+    },
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^0/",
+      "groupName": "non-major dependencies"
+    }
+  ]
+}

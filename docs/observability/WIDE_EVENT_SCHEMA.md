@@ -1,0 +1,45 @@
+# Wide event schema
+
+One `wide_event` log record per unit of work (HTTP request now; Kafka message and job later). It is the primary
+input for dashboards, alerts and the LLM digests (docs/PLAN.md §7), so **field names are an API**: add freely, rename
+never (deprecate, then remove after 90 days, which is the digest retention).
+
+## Transport
+- Logger `wide_event`, message `wide_event`, fields as SLF4J key-value pairs.
+- Console: ECS JSON. Dotted keys become nested objects (`http.route` → `{"http":{"route":...}}`).
+- OTLP → Loki: attributes with dots replaced by underscores (`http_route`), queryable as structured metadata:
+  `{service_name="tastebuds-core"} |= "wide_event" | http_response_status_code >= 500`
+- Correlation: `traceId`/`spanId` (MDC, console) and `trace_id` (OTLP) link to the trace in Tempo.
+- Level: `ERROR` when `outcome=error`, else `INFO`.
+
+## Rules
+- Keys: lowercase, dot-separated namespaces, `snake_case` segments (`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$`). Enforced.
+- Values: scalars only (string ≤ 256 chars, number, boolean, enum → lowercase name). Others become `unsupported:<Type>`.
+- No PII or secrets. Keys containing `password`, `secret`, `token`, `authorization`, `cookie`, `api_key`, `email`,
+  `phone`, `ssn` are force-redacted. No raw user input; no exception messages.
+- Low cardinality: route templates, not paths; IDs only when needed for investigation, and then opaque ones.
+- HTTP fields follow OpenTelemetry semantic conventions.
+
+## Fields
+
+### Common
+| Field | Type | Source | Description |
+|---|---|---|---|
+| `work.kind` | string | lib | `http` (later `message`, `job`) |
+| `outcome` | string | lib / handler | `success`, `client_error`, `error`; handlers may set others (e.g. `degraded`) |
+| `duration_ms` | long | lib | Wall time of the unit of work |
+| `error.class` | string | lib / advice | Exception class name |
+| `error.fingerprint` | string | lib / advice | 12-hex hash of the root-cause type + top app frames; groups "the same bug" |
+| `app.role` | string | core | `api`, `worker`, `all` |
+
+### HTTP (`work.kind = http`)
+| Field | Type | Description |
+|---|---|---|
+| `http.request.method` | string | `GET`, `POST`, … |
+| `http.route` | string | Matched route template (`/v1/media/{id}`), or `UNMATCHED` |
+| `http.response.status_code` | int | Final status (500 if an exception escaped) |
+
+### Reserved namespaces (to be filled by their modules)
+`rate_limit.*` (task 001), `auth.*`, `principal.*` (`principal.tier`: `anon`, `user`, `admin`), `db.*`
+(`db.query_count`), `llm.*` (`llm.model`, `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`, `llm.cache_hit`),
+`matching.*` (`matching.algo_version`, `matching.candidates`), `kafka.*`, `catalog.*`, `import.*`.

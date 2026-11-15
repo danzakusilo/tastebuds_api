@@ -1,0 +1,19 @@
+# Local observability stack: OpenTelemetry Collector + Loki + Tempo + Prometheus/Mimir + Grafana in one container.
+# Start: docker compose -f deploy/compose/compose.yaml up -d   (or docker-compose with v1)
+# Grafana: http://localhost:3000   OTLP: grpc :4317, http :4318
+# Application infrastructure (Postgres, later Redis/Kafka) is managed by Testcontainers via `bootTestRun`.
+services:
+  lgtm:
+    image: grafana/otel-lgtm:0.41.0
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - lgtm-data:/data
+
+volumes:
+  lgtm-data:

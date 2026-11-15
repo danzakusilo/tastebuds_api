@@ -1,0 +1,92 @@
+spring:
+  application:
+    name: tastebuds-core
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    # No defaults for credentials: production values come from secrets, local dev uses Testcontainers (bootTestRun).
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/tastebuds}
+    username: ${DATABASE_USERNAME:}
+    password: ${DATABASE_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${DATABASE_POOL_SIZE:10}
+      connection-timeout: 5000 # ms
+      data-source-properties:
+        currentSchema: core
+        # Hard cap on any single statement: a slow query must not exhaust the pool.
+        options: "-c statement_timeout=5000"
+  flyway:
+    schemas: core
+    default-schema: core
+  mvc:
+    problemdetails:
+      enabled: false # handled by ProblemDetailsAdvice
+
+server:
+  port: 8080
+  shutdown: graceful
+  max-http-request-header-size: 16KB
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+  tomcat:
+    connection-timeout: 10s
+    max-swallow-size: 2MB
+    max-http-form-post-size: 1MB
+
+management:
+  # Actuator on its own port: never routed through the public ingress.
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  info:
+    build:
+      enabled: true
+  tracing:
+    sampling:
+      # Sample everything in the app; the OTel Collector does tail-based sampling (keeps errors and slow traces).
+      probability: 1.0
+  opentelemetry:
+    resource-attributes:
+      service.namespace: tastebuds
+      deployment.environment: ${TASTEBUDS_ENV:local}
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 30s
+
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        environment: ${TASTEBUDS_ENV:local}
+
+tastebuds:
+  role: ${TASTEBUDS_ROLE:all}
+  cors:
+    allowed-origins: []
+  observability:
+    wide-events:
+      exclude-paths:
+        - /actuator/**
