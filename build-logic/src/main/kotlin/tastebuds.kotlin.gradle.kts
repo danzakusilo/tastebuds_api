@@ -33,6 +33,19 @@ tasks.withType<Test>().configureEach {
     }
 }
 
+dependencyLocking { lockAllConfigurations() }
+
+// Writes/refreshes gradle.lockfile: ./gradlew resolveAndLockAll --write-locks (see docs/build/DEPENDENCY_LOCKING.md)
+tasks.register("resolveAndLockAll") {
+    notCompatibleWithConfigurationCache("Resolves configurations at execution time")
+    doFirst {
+        require(gradle.startParameter.isWriteDependencyLocks) { "Run with --write-locks" }
+    }
+    doLast {
+        configurations.filter { it.isCanBeResolved }.forEach { it.resolve() }
+    }
+}
+
 detekt {
     buildUponDefaultConfig = true
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))

@@ -86,6 +86,14 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
 
+  agentic-scripts:
+    name: agentic scope scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck .claude/hooks/scope-guard.sh scripts/agentic/*.sh
+      - run: scripts/agentic/scope_test.sh
+
   scope:
     name: task scope
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'task/')

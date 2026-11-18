@@ -14,6 +14,19 @@ kover {
     }
 }
 
+dependencyLocking { lockAllConfigurations() }
+
+// Writes/refreshes gradle.lockfile: ./gradlew resolveAndLockAll --write-locks (see docs/build/DEPENDENCY_LOCKING.md)
+tasks.register("resolveAndLockAll") {
+    notCompatibleWithConfigurationCache("Resolves configurations at execution time")
+    doFirst {
+        require(gradle.startParameter.isWriteDependencyLocks) { "Run with --write-locks" }
+    }
+    doLast {
+        configurations.filter { it.isCanBeResolved }.forEach { it.resolve() }
+    }
+}
+
 tasks.named("check") {
     dependsOn("koverVerify")
 }
