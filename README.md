@@ -42,3 +42,6 @@ Then open Grafana → Explore → Tempo/Loki and search for service `tastebuds-c
 | `deploy` | Local compose stack; Helm/k8s from Phase 1 |
 | `docs` | [Plan](docs/PLAN.md), [tasks](docs/tasks), [backlog](docs/backlog), [wide event schema](docs/observability/WIDE_EVENT_SCHEMA.md) |
 | `.claude` | Agent roles, orchestration skills, scope-guard hook |
+
+## License
+Apache License 2.0, see [LICENSE](LICENSE).

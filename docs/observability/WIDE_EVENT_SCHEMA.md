@@ -41,6 +41,12 @@ never (deprecate, then remove after 90 days, which is the digest retention).
 | `http.request.method` | string | `GET`, `POST`, … |
 | `http.route` | string | Matched route template (`/v1/media/{id}`), or `UNMATCHED` |
 | `http.response.status_code` | int | Final status (500 if an exception escaped) |
+| `http.request.body_too_large` | boolean | `true` when the request was rejected with 413 (absent otherwise) |
+
+### Auth
+| Field | Type | Description |
+|---|---|---|
+| `auth.failure` | string | `unauthenticated` (401 from the entry point) or `access_denied` (403 from the access-denied handler); absent otherwise |
 
 ### Reserved namespaces (to be filled by their modules)
 `rate_limit.*` (task 001), `auth.*`, `principal.*` (`principal.tier`: `anon`, `user`, `admin`), `db.*`

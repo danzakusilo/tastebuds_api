@@ -1,6 +1,6 @@
 # 003 — problem+json for security errors, request body cap, truthful security docs
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 0 (hardening from the 2026-11-15 external review, items 5 and 10)
 - **Planned by:** claude-opus-5-5 on 2026-11-15
 - **Depends on:** none (independent of 002; 004 depends on this one because both edit SECURITY.md)
@@ -175,3 +175,42 @@ Types in `platform/web`:
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: CHANGES_REQUESTED
+Gates (reviewer-run): `./gradlew check` green, 38 tests; new/changed coverage ≥ 85%; scope clean (vs `main`; only the
+pre-existing untracked `local.properties`). LICENSE byte-identical to apache.org (sha256 cfc7749b…). AC1–4, 8 met; rethrow
+to `ExceptionTranslationFilter` proven end to end.
+1. AC5 not proven against production wiring: `ErrorResponsesIntegrationTest` hand-builds MockMvc with only the body-limit
+   filter + `springSecurity()` in a test-chosen order (no `WideEventFilter`), so an order regression would pass and no test
+   shows the emitted wide event has `http.request.body_too_large=true`. Fix: run anonymous tests (AC5, ideally AC1) through
+   the autoconfigured `MockMvc`; capture output (pattern from `CoreApplicationIntegrationTest`) and assert one `wide_event`
+   with `body_too_large=true` and status 413; keep the hand-built MockMvc only for `@WithMockUser` tests, with an honest comment.
+2. Oversized chunked form body on PUT/PATCH/DELETE → 500 (Boot `/error` JSON, ERROR log, `outcome=error`), not 413:
+   `OrderedFormContentFilter` reads the body through the counted stream before MVC, so `RequestBodyTooLargeException`
+   escapes the filter chain (reproduced on a real port). Fix: in `RequestBodyLimitFilter.doFilterInternal`, catch it (or a
+   cause) around `filterChain.doFilter`, and if `!response.isCommitted` set the wide event field and write the 413 via
+   `ProblemResponses`; else rethrow. Test with an unknown-length PUT form body of `limit + 1` read by `FormContentFilter`.
+3. `getReader()` returns a new `BufferedReader` per call, losing buffered data on a second call. Fix: cache lazily; test
+   same instance or split read yields the whole body.
+Non-blocking: untested single-byte `read()`; `available()`/`close()` not delegated; implementer wrote files via shell,
+bypassing the hook (all in scope).
+Backlog created: 2026-11-18-boot4-security-test-glue, -multipart-limits-exceed-body-cap,
+-pre-security-responses-lack-hardened-headers, -scope-guard-ignores-shell-writes, -unused-generated-security-user.
+
+### Round 2: CHANGES_REQUESTED
+Gates (reviewer-run): `./gradlew check` green, 41 tests; `RequestBodyLimit.kt` 40/43 (93%); scope clean. Round-1 findings
+1–3 resolved; finding 2 confirmed on a real Tomcat port (chunked PUT/PATCH/DELETE form bodies of 1.5 MB → 413
+problem+json, `outcome=client_error`, no ERROR log; exactly 1 MB → 401).
+1. The rethrow path of the new catch in `RequestBodyLimitFilter.doFilterInternal` is untested: changing the condition so
+   every exception becomes a 413, or dropping the `isCommitted` guard (silently swallowing), still passes all 41 tests.
+   Fix: unit tests for (a) an unrelated exception from the chain propagates as the same instance, status stays 200, no
+   problem body, no `http.request.body_too_large`; (b) a body-limit exception after the response is committed is rethrown.
+Non-blocking: cause-chain search duplicated in `ProblemDetailsAdvice` and `RequestBodyLimit`; no `resetBuffer()` before
+the 413 in the catch path; fully qualified `HttpServlet` in `RequestBodyLimitFilterTest`.
+
+### Round 3: APPROVE
+none. Round-2 finding resolved with `unrelated exceptions from the chain pass through untouched` and
+`a body-limit failure after the response is committed is rethrown`; the reviewer re-ran both mutations of the rethrow
+condition and each now fails a test. Final gates: `./gradlew check` green, 68 tests (core 43); `RequestBodyLimit.kt`
+41/44, all other new/changed files 100%; scope clean. Non-blocking: cause-chain search still duplicated in
+`ProblemDetailsAdvice` and `RequestBodyLimit`.
