@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read # SARIF upload reads workflow-run metadata
   security-events: write
 
 jobs:
