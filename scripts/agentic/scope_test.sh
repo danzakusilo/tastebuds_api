@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests for scope.sh, task-meta.sh and the scope-guard hook, run in a throwaway git repo.
 # Prints "ok - <name>" / "not ok - <name>" per case; exits 1 if any case failed.
-# The helper functions are invoked indirectly through run/want, which shellcheck cannot follow.
-# shellcheck disable=SC2317
+# The helper functions are invoked indirectly through run/want, which shellcheck cannot follow
+# (SC2317 up to shellcheck 0.10, SC2329 from 0.11).
+# shellcheck disable=SC2317,SC2329
 set -uo pipefail
 
 src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
