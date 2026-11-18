@@ -5,7 +5,8 @@ plugins {
 }
 
 springBoot {
-    buildInfo()
+    // No timestamp: it would change build-info.properties on every build and defeat up-to-date checks and the cache.
+    buildInfo { excludes.set(setOf("time")) }
 }
 
 // Only the executable jar is needed; the plain jar would be ambiguous for the Dockerfile's COPY.
