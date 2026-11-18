@@ -32,6 +32,8 @@ Close three tooling gaps (docs/PLAN.md §8.5, §9, docs/agentic/WORKFLOW.md):
 - `gradle.lockfile`
 - `libs/observability/gradle.lockfile`
 - `services/core/gradle.lockfile`
+- `settings-gradle.lockfile`
+- `build-logic/settings-gradle.lockfile`
 - `.claude/hooks/scope-guard.sh`
 - `.claude/skills/run-task/SKILL.md`
 - `scripts/agentic/scope.sh`
@@ -76,8 +78,10 @@ springBoot {
   configuration by name (`configurations.named("x") { resolutionStrategy.deactivateDependencyLocking() }`), comment why,
   list it in the doc, and mention it in the implementer report. Do not switch to a different locking scheme.
 - Generate with `./gradlew resolveAndLockAll --write-locks` and `./gradlew -p build-logic resolveAndLockAll --write-locks`.
-  Commit exactly the four lockfiles in Allowed paths. If Gradle produces any other lockfile (e.g.
-  `settings-gradle.lockfile`), stop and report `SCOPE_BLOCKED` with its path.
+  Commit exactly the six lockfiles in Allowed paths: four `gradle.lockfile`s plus the two `settings-gradle.lockfile`s
+  that Gradle writes for the settings-level version catalog configuration (`empty=incomingCatalogForLibs0`; amended
+  2026-11-18 by the user after round 1). If Gradle produces any other lockfile, stop and report `SCOPE_BLOCKED` with
+  its path.
 - `docs/build/DEPENDENCY_LOCKING.md`: why (reproducible resolution; Trivy fs reads `gradle.lockfile`), the two
   commands above, when to run them (after any change to `libs.versions.toml`, build scripts, or plugin versions;
   Renovate PRs already include refreshed lockfiles), how a stale lockfile shows up (resolution failure naming the
@@ -162,7 +166,7 @@ stop and report `SCOPE_BLOCKED` (do not repair it via shell).
 ## Acceptance criteria
 1. `build/resources/main/META-INF/build-info.properties` of `:services:core` has no `build.time`; running
    `./gradlew :services:core:test` twice in a row reports the second `test` task as `UP-TO-DATE` or `FROM-CACHE`.
-2. The four lockfiles exist and are committed; `./gradlew check` passes with locking active; temporarily changing a
+2. The six lockfiles exist and are committed; `./gradlew check` passes with locking active; temporarily changing a
    version in `libs.versions.toml` without `--write-locks` makes dependency resolution fail (reviewer spot check, reverted).
 3. `docs/build/DEPENDENCY_LOCKING.md` documents the commands and workflow.
 4. With an active task, the hook blocks (exit 2) edits to the active spec even when a glob matches it.
