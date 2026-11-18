@@ -37,10 +37,17 @@ server:
     include-stacktrace: never
     include-message: never
     include-binding-errors: never
+  # Behind a TLS-terminating ingress. X-Forwarded-For/-Proto are honoured only from internal proxies, see
+  # docs/security/FORWARDED_HEADERS.md. Narrow the trusted range per environment with
+  # SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES (comma-separated CIDR list, e.g. 10.1.0.0/16; replaces the default).
+  forward-headers-strategy: native
   tomcat:
     connection-timeout: 10s
     max-swallow-size: 2MB
     max-http-form-post-size: 1MB
+    remoteip:
+      remote-ip-header: x-forwarded-for
+      protocol-header: x-forwarded-proto
 
 management:
   # Actuator on its own port: never routed through the public ingress.

@@ -1,6 +1,6 @@
 # 004 — Trust forwarded headers only from internal proxies
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 0 (hardening from the 2026-11-15 external review, item 9)
 - **Planned by:** claude-opus-5-5 on 2026-11-15
 - **Depends on:** 003 (both edit SECURITY.md)
@@ -96,3 +96,30 @@ Add one bullet to "Security design" after the hardened-headers bullet:
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: CHANGES_REQUESTED
+Gates (reviewer-run): `./gradlew check` green; new tests 4/4; core lines 145/149; scope clean (vs the 003 branch).
+Config correct, confirmed by real-HTTP probes (filter order, no context leak, AC4 on IPv4 and IPv6, internal-hop skip).
+1. Tests can pass on a stale capture (AC3 stayed green with a path Tomcat rejects with 400) and no test asserts the status.
+   Fix: assert 200 before reading `capture.last()` in every test; optionally clear the capture before each request.
+2. FORWARDED_HEADERS.md overclaims: with the default range every private-range peer (typically every pod) can choose its
+   client address (any string) and scheme; the prefix guarantee needs the ingress to see the real client IP (not an
+   SNAT'd private one). State both plainly.
+3. FORWARDED_HEADERS.md omits that `X-Forwarded-Host`/`-Port` are honoured too (Boot default) and affect
+   `serverName`/`serverPort`/absolute URLs; operator checklist must require the ingress to set/overwrite them.
+4. (minor) `internal-proxies` described as "a Java regex": it is a comma-separated CIDR list (if it contains `/`) or a
+   single regex; Boot's default is CIDR; setting it replaces the default (loopback included). Fix doc and the
+   application.yaml comment. Orchestrator decision: the comment may deviate from the spec's Design notes wording for
+   accuracy; no other config change.
+Optional: add an internal hop to AC3 (`198.51.100.9, 203.0.113.7, 10.0.0.5`); use `10.255.255.255/32` in the untrusted test.
+Backlog created: 2026-11-18-forwarded-host-port-headers, -mesh-sidecar-internal-proxies,
+-rate-limit-client-key-validation, -shared-testcontainers-postgres.
+
+### Round 2: APPROVE
+none. Round-1 findings 1–4 resolved; the reviewer repeated the stale-capture mutation (all 4 tests now fail on a
+Tomcat-rejected path) and probed the untrusted override from IPv4 and IPv6 loopback. Deviations from the Design notes,
+accepted: the application.yaml comment describes `internal-proxies` as a CIDR list (accuracy, see round 1 finding 4);
+`UntrustedProxyIntegrationTest` overrides with `10.255.255.255/32` instead of the regex (same meaning, exact match; the
+inline-property regex lost its backslashes). AC3 also skips an internal hop. Final gates: `./gradlew check` green, core
+lines 145/149; scope clean vs the 003 branch. Non-blocking: yaml comment mentions only XFF/-Proto; X-Forwarded-Port is
+applied only together with X-Forwarded-Proto.
