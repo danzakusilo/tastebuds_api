@@ -92,6 +92,8 @@ tastebuds:
   role: ${TASTEBUDS_ROLE:all}
   cors:
     allowed-origins: []
+  web:
+    max-request-body-size: 1MB # applies to every request body; bigger uploads get their own route-level limit later
   observability:
     wide-events:
       exclude-paths:
