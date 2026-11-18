@@ -28,6 +28,7 @@ Close three tooling gaps (docs/PLAN.md §8.5, §9, docs/agentic/WORKFLOW.md):
 - `build-logic/src/main/kotlin/tastebuds.kotlin.gradle.kts`
 - `build-logic/src/main/kotlin/tastebuds.coverage-aggregate.gradle.kts`
 - `build-logic/build.gradle.kts`
+- `gradle/libs.versions.toml`
 - `build-logic/gradle.lockfile`
 - `gradle.lockfile`
 - `libs/observability/gradle.lockfile`
@@ -86,6 +87,12 @@ springBoot {
   commands above, when to run them (after any change to `libs.versions.toml`, build scripts, or plugin versions;
   Renovate PRs already include refreshed lockfiles), how a stale lockfile shows up (resolution failure naming the
   module), and the list of configurations excluded from locking (if any).
+- Build-tool CVE override (amended 2026-11-18 by the user after the PR's Trivy fs scan failed): Kover 0.9.11 (latest)
+  puts `org.freemarker:freemarker:2.3.32` (CVE-2026-84939, CRITICAL, fixed in 2.3.35) on the `build-logic` classpath.
+  In `gradle/libs.versions.toml` add only `freemarker = "2.3.35"` under `[versions]` and
+  `freemarker = { module = "org.freemarker:freemarker", version.ref = "freemarker" }` under `[libraries]`. In
+  `build-logic/build.gradle.kts` add `constraints { implementation(libs.freemarker) { because("…") } }` naming the
+  CVE and Kover, then refresh `build-logic/gradle.lockfile`. Remove the constraint once Kover ships 2.3.35 or later.
 
 ### 3. Scope guard
 
