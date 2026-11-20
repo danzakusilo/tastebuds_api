@@ -1,7 +1,10 @@
 # Tastebuds API — Master Plan
 
 > Living document. Changes to scope or architecture go through a PR that edits this file.
-> Last revised: 2026-11-15 (post-review: D3, D4, D12 revised; D15, D16 added; phases re-ordered).
+> Last revised: 2026-11-20 (client UX spec `tastebuds_spec`: D17–D20 added; §3.2 `library` module; §4 stars, library,
+> reactions, picks; §5.5 user links publish at once; §6 client contract, `GET /v1/explore` dropped (no client screen; Discover deals
+> user links only); Phases 3–5; risk register). Previous:
+> 2026-11-15 (post-review: D3, D4, D12 revised; D15, D16 added; phases re-ordered).
 
 ## 1. Vision
 
@@ -38,6 +41,10 @@ emphasis on **observability, iteration speed, agentic development, security, and
 | D16 | Deployment target | **Kubernetes from Phase 1**: k3d locally, Helm chart for core, CloudNativePG; the chart is the deployment contract from day one | Added 2026-11-15; was deferred to the launch phase |
 | D13 | Cache / limits | Redis (rate-limit buckets, anon sessions, hot caches) | |
 | D14 | Music data | MusicBrainz / ListenBrainz (open data). **No Spotify-derived ML features** (Spotify's terms forbid it) | |
+| D17 | Client UX source | **`tastebuds_spec`** (GitHub `danzakusilo/tastebuds_spec`): flows F01–F08, components C01–C02, glossary | Added 2026-11-20. Calls the spec marks *proposed* enter §6 before client work on them starts (the client builds ahead on fakes). This plan stays the product and domain source; on a conflict, stop and flag it |
+| D18 | Ratings | **0.5–5 stars** in half steps, stored and shown; `sentiment` −2..+2 is **derived** from the rating | Added 2026-11-20 (spec F02 §7 Q3). Imports and the design system use stars. A take may have text and no rating |
+| D19 | User-proposed vibe links ("connections") | **Publish at once**; reports and takedown come later. One per user per unordered media pair, note required | Added 2026-11-20 (spec F05 §7 Q1–Q4). Was "moderated" (§5.5). Every external link in user text opens behind a client warning dialog (spec C02) |
+| D20 | Visibility | Every user's takes and links **feed matching and stats**. At sign-up the user picks **Public** or **Anonymous**: an anonymous account is never shown with a handle, avatar or id to others | Added 2026-11-20 (spec F05 §7 Q6, F08). Replaces "opt-in visibility" in §12; the sign-up notice discloses the use. Not the signed-out anon session |
 
 ## 3. Architecture
 
@@ -76,12 +83,13 @@ docs/                        plan, ADRs, tasks, backlog, threat model, runbooks
 | Module | Responsibility |
 |---|---|
 | `catalog` | Canonical `Media`, external IDs, search, ingest from providers, dedup |
-| `takes` | User opinions: sentiment, liked/disliked aspects, free text |
+| `takes` | User opinions: star rating (sentiment derived), liked/disliked aspects, free text, spoiler flag, logged-on date |
+| `library` | Saved media with a status (want to, in progress, done, not for me) and where it was saved from; private |
 | `vibes` | Aspect extraction (LLM), vibe vectors (media + user), cross-media links |
-| `matching` | Candidate generation (ANN), scoring, explanations, explore tiers |
-| `recs` | Media recommendations from matches |
-| `social` | Follows, feed, comments, blocks, reports |
-| `imports` | CSV/API imports (Letterboxd, Goodreads, Trakt, MAL, Steam, ListenBrainz) |
+| `matching` | Candidate generation (ANN), scoring, explanations, Discover ranking of user links |
+| `recs` | Media recommendations from matches (the quick-match picks) |
+| `social` | Profiles and visibility, follows, feed, comments, likes on takes, reactions on user links, blocks, reports |
+| `imports` | CSV/API imports (Letterboxd, Goodreads, StoryGraph, Trakt, MAL, Steam, ListenBrainz) |
 | `sessions` | Anonymous sessions, merge-on-signup |
 | `feedback` | Match feedback, experiment assignment |
 | `ops` | Telemetry digests, report export, admin |
@@ -97,12 +105,15 @@ Keys = aggregate ID (ordering per entity). Schemas: JSON Schema, versioned, cont
 ## 4. Domain model (sketch)
 
 - **Media**(id, kind ∈ {FILM, TV, ANIME, GAME, BOOK, MUSIC_ALBUM, MUSIC_TRACK, MUSIC_WORK, PODCAST}, title, year, creators[], external_ids{}, description, catalog_vibe)
-- **User**(id, handle, visibility, trust_score) — identity lives in `identity`; core holds a projection
+- **User**(id, handle, visibility ∈ {PUBLIC, ANONYMOUS}, bio?, preferences, trust_score) — identity lives in `identity`; core holds a projection
 - **AnonSession**(id, expires_at, budget_remaining)
-- **Take**(id, owner(user|anon), media_id, sentiment −2..+2, liked_aspects[], disliked_aspects[], text?, extracted_aspects, vibe_vector, extraction_status)
-- **VibeLink**(media_a, media_b, score, shared_dims[], source ∈ {COMPUTED, USER}, votes) — user-proposed links are first-class content
+- **Take**(id, owner(user|anon), media_id, rating? 0.5–5, sentiment −2..+2 (derived from rating), liked_aspects[], disliked_aspects[], text?, spoiler, logged_on, origin ∈ {APP, IMPORT}, extracted_aspects, vibe_vector, extraction_status) — one per owner per media; a take with text is a *review*
+- **VibeLink**(media_a, media_b, score, shared_dims[], source ∈ {COMPUTED, USER}, votes, author?, note?) — user-proposed links ("connections") are first-class content: symmetric, note required, one per author per unordered pair
+- **LinkReaction**(user, vibe_link, reaction ∈ {LIKE, SAVE, PASS}, algo_version) — LIKE is the vote; SAVE and PASS come from the Discover deck and feed ranking
+- **LibraryEntry**(owner, media_id, status ∈ {WANT, IN_PROGRESS, DONE, DROPPED}, source_link_id? | source_take_id? | source_import?, added_at, status_changed_at)
 - **Match**(user_a, user_b, score, tier, explanation, algo_version, computed_at)
-- **Follow**, **Comment**(on Take), **FeedbackEvent**(match_id, verdict, reason?)
+- **QuickMatch**(id, owner, status ∈ {QUICK, REFINING, REFINED, SKIPPED}, fallback, picks[media, tier ∈ {SAFE, LIKELY, POSSIBLE}, explanation, vibe_tags[], supporter_count], algo_version)
+- **Follow**, **Comment**(on Take; editable by its author, removable by the take's owner), **TakeLike**, **FeedbackEvent**(match_id, verdict, reason?)
 - **ImportJob**(id, owner, source, status, stats)
 
 ## 5. The vibe engine (cross-media core)
@@ -136,24 +147,50 @@ score(a,b) = w1·overlap_idf(a,b)          # shared media weighted by rarity (ID
 
 ### 5.5 Cross-media links
 - Computed: nearest neighbours in vibe space restricted to a *different* `kind`, keeping only pairs whose shared dims are strong (explainable).
-- User-proposed: "X reads like Y", with an optional reason; votes and trust weighting; moderated.
+- User-proposed: "X reads like Y", with the author's note as the reason (required); votes and trust weighting;
+  published at once, reports and takedown later (D19).
 - Surfaced on media pages, in explanations, and in "possible" tier recs.
 
 ### 5.6 LLM safety and cost
 - User text is **data**: strict JSON-schema structured output, no tools, rubric in the system prompt, output validated and clamped.
 - Async only (Kafka worker), never on the request path. Cache keyed by hash(normalized text + rubric version).
 - Per-anon-session and per-user daily budgets; a global monthly cost meter with a circuit breaker (degrades to overlap + catalog-prior matching).
-- Batch API for catalog annotation backfills.
+- Batch API for catalog annotation backfills, and for the text of imported reviews (under the cost meter).
 
 ## 6. API surface (v1, indicative)
 
-Public/anonymous: `POST /v1/sessions/anonymous`, `GET /v1/media/search?q=&kind=`, `GET /v1/media/{id}`,
-`PUT /v1/me/takes/{mediaId}`, `POST /v1/matches/quick`, `GET /v1/matches/{id}` (partially redacted for anon),
-`POST /v1/imports` (anon: temporary, TTL).
-Authenticated: `GET /v1/feed`, `GET /v1/explore?tier=`, `POST /v1/follows/{userId}`, `POST /v1/takes/{id}/comments`,
+Public/anonymous: `POST /v1/sessions/anonymous`, `GET /v1/media/search?q=&kind=&cursor=` (`kind` repeatable),
+`GET /v1/media/{id}`, `GET`/`PUT`/`DELETE /v1/me/takes/{mediaId}`, `POST /v1/matches/quick`, `GET /v1/matches/{id}`
+(partially redacted for anon), `POST /v1/imports` (anon: temporary, TTL), `GET /v1/imports/{id}`.
+Authenticated: `GET /v1/feed`, `POST /v1/follows/{userId}`, `POST /v1/takes/{id}/comments`,
 `POST /v1/matches/{id}/feedback`, `POST /v1/vibe-links`, `GET /v1/me/export`, `DELETE /v1/me`.
 Admin: `GET /v1/admin/reports`, `POST /v1/admin/reports/export`.
 Conventions: problem+json errors, cursor pagination, `Idempotency-Key` on writes, ETags on reads.
+
+**Client contract (from `tastebuds_spec`, D17).** Shapes are in the linked spec sections; a task that builds one
+copies it into OpenAPI.
+
+| Area | Calls | Spec |
+|---|---|---|
+| Takes | `PUT /v1/me/takes/{mediaId}` `{rating?, text?, spoiler, loggedOn}` (D18); `GET` to prefill; `DELETE` | F01 §6, F07 §4 |
+| Quick match | `POST /v1/matches/quick` (empty body: the session's takes) and `GET /v1/matches/{id}` return a `QuickMatch`: `status` QUICK → REFINING → REFINED or SKIPPED, `fallback`, `picks[]` with tier, explanation, vibe tags and supporter count; the client polls while REFINING (SSE later, D8) | F01 §6 |
+| Me | `GET /v1/me` (summary incl. take count), `PUT /v1/me/visibility` `{PUBLIC \| ANONYMOUS}`, `PUT /v1/me/preferences` | F04 §3.3, F08 §2, F03 §5 |
+| Feed | `GET /v1/feed?cursor=&types=&kinds=`: items `REVIEW` (a take with text) and `CONNECTION` | F02 §4 |
+| Reviews | `GET /v1/takes/{id}`, `PUT`/`DELETE /v1/takes/{id}/like`, `GET /v1/takes/{id}/comments?cursor=`, `PATCH`/`DELETE /v1/comments/{id}` | F02 §3.4, §4 |
+| People | `GET /v1/me/suggestions/people`, `DELETE /v1/follows/{userId}`, profile and its lists by handle | F02 §3.2, F05 §2 |
+| Connections | `PATCH`/`DELETE /v1/vibe-links/{id}` (note only), `GET /v1/me/vibe-links?pair=` (duplicate check), `PUT`/`DELETE /v1/vibe-links/{id}/reaction` `{LIKE \| SAVE \| PASS}` with `algoVersion`, more links per media for the detail page | F05 §3–4, F03 §5 |
+| Discover | `GET /v1/discover/connections?cursor=&kinds=`: cards with `reason`, `tasteMatch` (public authors only), author summary, `algoVersion` | F03 §5 |
+| Library | `GET /v1/me/library?status=&kinds=&cursor=&sort=` (counts per status in the first page), `POST /v1/me/library/batch` `{mediaIds, status, sourceConnectionId? \| sourceTakeId?}`, `PATCH`/`DELETE /v1/me/library/{mediaId}` | F04 §5 |
+
+Rules these calls enforce:
+- Feeds carry only takes and links created in the app: never imported takes (also after an edit), never rating-only takes.
+- Anonymous accounts (D20): every response read by another user has `author: null, anonymous: true`, and no handle,
+  avatar, id or timestamp finer than a day; their profile is not found for others; they can't comment or be followed;
+  lists count them and never list them.
+- Library entries are private. Saving a media that is already in the Library never changes its status. A review's
+  save count counts the saves made from that review only.
+- Discover never shows the viewer's own links or links by people they follow; a passed link never returns.
+- Comments are a flat list, oldest first; the take's owner may remove any comment on it.
 
 ## 7. Observability
 
@@ -289,7 +326,8 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 ### Phase 3: Vibe engine and matching (vertical slice 2, the core value)
 - **Entry gate:** the vibe-axis report recommends a rubric with acceptable stability and agreement.
 - Rubric v1 + anchors, catalog prior annotation (batch), take extraction worker, embeddings, pgvector HNSW.
-- Quick match (overlap-IDF) → deep match → explanations → partial reveal for anon.
+- Quick match (overlap-IDF) → deep match → explanations → partial reveal for anon. The quick match returns picks
+  with a refinement status (§6 client contract, spec F01).
 - Computed cross-media vibe links; cost meter + circuit breaker.
 - Offline eval harness (reference profiles from openly licensed data only, clearly labelled; see risk register).
 
@@ -297,11 +335,15 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 - Domain + transactional email (D3) set up first.
 - `services/identity` (SAS, OIDC, PKCE, Argon2id, email verification, MFA TOTP, refresh rotation); core as resource server.
 - Merge-on-signup (anon takes → account), GDPR export/delete.
+- Visibility choice after the first sign-in (D20), `GET /v1/me`, user preferences.
 
 ### Phase 5: Social, imports, feedback, ops
-- Follow, feed, comments, blocks/reports, moderation; explore tiers.
-- Imports (Letterboxd, Goodreads, Trakt, MAL, Steam, ListenBrainz) via Kafka with job status.
-- Match feedback + experiment assignment; user-proposed vibe links + voting.
+- Follow, feed, comments (list, edit, delete), likes on takes, blocks/reports, moderation.
+- `library` module (saved media with statuses, spec F04) and the Discover deck of user links with save and pass
+  reactions (spec F03).
+- Imports (Letterboxd, Goodreads, StoryGraph, Trakt, MAL, Steam, ListenBrainz) via Kafka with job status; want-to
+  lists become `WANT` library entries.
+- Match feedback + experiment assignment; user-proposed vibe links + voting (published at once, D19).
 - LLM digests + report export; telemetry MCP server.
 
 ### Phase 6: Production hardening and launch
@@ -318,7 +360,8 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 | O(n²) matching | ANN candidates + re-rank; incremental recompute from events |
 | LLM cost-DoS | Async only, budgets, cache, circuit breaker |
 | Prompt injection | Data-only prompts, schema-constrained output, no tools |
-| Sensitive inference from taste data | Opt-in visibility, server-side redaction, view quotas, GDPR delete |
+| Sensitive inference from taste data | Public/Anonymous choice at sign-up with a plain disclosure that all data feeds matching (D20), server-side redaction, view quotas, GDPR delete |
+| Abuse in user-proposed links (published at once, D19) | Reports and takedown before public launch; trust weighting; client warning dialog for external links |
 | Malicious imports | Streaming, caps, no URL fetches, sandboxed worker |
 | Sybil/fake profiles | Trust score, anomaly detection, feedback reputation |
 | Provider ToS | Attribution; no Spotify-derived ML |
