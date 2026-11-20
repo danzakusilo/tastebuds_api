@@ -5,7 +5,7 @@ Every change made by an implementer agent starts as a spec in this folder: `NNN-
 
 | ID | Title | Phase | Status |
 |----|-------|-------|--------|
-| [001](001-rate-limiting.md) | Cost-weighted rate limiting (Redis + Bucket4j) | 1 | READY |
+| [001](001-rate-limiting.md) | Cost-weighted rate limiting per client IP (Redis + Bucket4j; revised 2026-11-20, depends on 003–005) | 1 | READY |
 | [002](002-db-and-wide-event-hardening.md) | Harden DB wiring (pgvector search path, Flyway connection, non-superuser tests) and fail-safe wide events | 0 | DONE |
 | [003](003-error-responses-and-body-limit.md) | problem+json for security errors, request body cap, truthful security docs, LICENSE | 0 | DONE |
 | [004](004-forwarded-headers.md) | Trust forwarded headers only from internal proxies (depends on 003) | 0 | DONE |
