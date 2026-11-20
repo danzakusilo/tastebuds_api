@@ -1,6 +1,6 @@
 # 003 — problem+json for security errors, request body cap, truthful security docs
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 0 (hardening from the 2026-11-15 external review, items 5 and 10)
 - **Planned by:** claude-opus-5-5 on 2026-11-15
 - **Depends on:** none (independent of 002; 004 depends on this one because both edit SECURITY.md)

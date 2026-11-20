@@ -1,6 +1,6 @@
 # 004 — Trust forwarded headers only from internal proxies
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 0 (hardening from the 2026-11-15 external review, item 9)
 - **Planned by:** claude-opus-5-5 on 2026-11-15
 - **Depends on:** 003 (both edit SECURITY.md)

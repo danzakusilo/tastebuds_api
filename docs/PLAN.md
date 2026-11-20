@@ -250,7 +250,7 @@ that introduces them; the budget is enforced by the cost meter, not by estimates
 
 Each phase ends with a demoable, observable, secured increment. Exit criteria are checked by the reviewer agent.
 
-### Phase 0: Foundations *(done 2026-11-15, CI pending first push)*
+### Phase 0: Foundations *(done 2026-11-15; hardening done 2026-11-18)*
 - ✅ Gradle multi-module + convention plugins; quality gates (Kover 70% floor, ktlint, detekt, ArchUnit, Modulith verification).
 - ✅ Core service skeleton: roles, virtual threads, actuator on separate port, OTel (traces/metrics/logs over OTLP),
   wide-event filter, problem+json, deny-by-default security with hardened headers, Flyway baseline (pgvector).
@@ -259,11 +259,11 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 - ✅ Distroless container image; verified end to end: request → wide event in Loki (structured attributes) + trace in Tempo.
 - ✅ Agentic workflow: CLAUDE.md, planner/implementer/reviewer agents, `/plan-task` + `/run-task` skills, scope-guard hook, backlog.
 - ✅ CI: build/test/coverage, image build + Trivy, gitleaks, CodeQL, task-scope job; Renovate; SECURITY.md, README.
-- 🔧 Hardening from the 2026-11-15 external review (pgvector search path, Flyway/DB roles, wide-event safety,
+- ✅ Hardening from the 2026-11-15 external review (pgvector search path, Flyway/DB roles, wide-event safety,
   problem+json for security errors, forwarded headers, dependency locking, scope-guard fixes, LICENSE): see `docs/tasks/`.
-  Progress: 002 (DB wiring + wide-event safety) ✅ done; 003, 004, 005 ready.
-- **Exit:** `./gradlew check` green locally ✅ and in CI (after first push); a request produces one wide event plus a trace ✅;
-  hardening tasks merged.
+  Tasks 002, 003, 004, 005 done (merged by 2026-11-18).
+- **Exit:** `./gradlew check` green locally and in CI ✅; a request produces one wide event plus a trace ✅;
+  hardening tasks merged ✅.
 
 > Phases revised 2026-11-15: Kubernetes moves to Phase 1 (D16), identity moves after the anonymous vertical slices
 > (D4), and the vibe axes get an offline validation gate before Phase 3 engineering.

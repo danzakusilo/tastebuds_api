@@ -1,6 +1,6 @@
 # 005 — Reproducible build inputs, dependency locking, fail-closed scope guard
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 0 (hardening from the 2026-11-15 external review, items 6, 7 and 8)
 - **Planned by:** claude-opus-5-5 on 2026-11-15
 - **Depends on:** none (independent of 002–004; run it last or first, it touches no application code)
