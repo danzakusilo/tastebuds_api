@@ -16,14 +16,16 @@ import org.springframework.web.cors.CorsConfigurationSource
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 
 /**
- * Baseline for a stateless JSON API: no sessions, no cookies, deny by default, strict response headers.
- * Bearer-token authentication (OAuth2 resource server) is added in Phase 1, see docs/PLAN.md section 8.3.
+ * Baseline for a stateless JSON API: no server sessions, no cookies, deny by default, strict response headers.
+ * Anonymous-session bearer tokens authenticate as `ANON_SESSION` (AnonSessionConfiguration, docs/security/ANON_SESSIONS.md);
+ * account tokens (OAuth2 resource server) follow in Phase 4, see docs/PLAN.md section 8.3.
  */
 @Configuration(proxyBeanMethods = false)
 class SecurityConfiguration {
     @Bean
     fun apiSecurityFilterChain(http: HttpSecurity): SecurityFilterChain {
-        // Customizer<HttpSecurity> beans extend this chain: platform.ratelimit adds the rate limiter right after CorsFilter.
+        // Customizer<HttpSecurity> beans extend this chain: platform.ratelimit adds the rate limiter right after CorsFilter,
+        // AnonSessionConfiguration adds anonymous-session authentication right before AnonymousAuthenticationFilter.
         http {
             // CSRF protection targets ambient credentials (cookies). This API accepts none, only bearer tokens.
             csrf { disable() }
@@ -35,10 +37,13 @@ class SecurityConfiguration {
             cors { }
             authorizeHttpRequests {
                 authorize(HttpMethod.GET, "/v1/meta", permitAll)
+                authorize(HttpMethod.POST, "/v1/sessions/anonymous", permitAll)
                 // Probes and build info on the management port (never exposed through the ingress).
                 authorize(EndpointRequest.to("health", "info"), permitAll)
                 authorize("/error", permitAll)
-                authorize(anyRequest, authenticated)
+                // Anything else needs a signed-in account (Phase 4 grants ROLE_USER). Not `authenticated`: anonymous
+                // sessions authenticate too, and anyone can create one. Endpoints open to them get their own rule.
+                authorize(anyRequest, hasRole("USER"))
             }
             exceptionHandling {
                 authenticationEntryPoint = ProblemDetailsAuthenticationEntryPoint()

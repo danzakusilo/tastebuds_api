@@ -107,6 +107,12 @@ tastebuds:
     allowed-origins: []
   web:
     max-request-body-size: 1MB # applies to every request body; bigger uploads get their own route-level limit later
+  anon-session:
+    # Signed bearer tokens for signed-out users, docs/security/ANON_SESSIONS.md. Signing keys come from a secret, never
+    # from this file: TASTEBUDS_ANONSESSION_SIGNINGKEYS_0_ID / TASTEBUDS_ANONSESSION_SIGNINGKEYS_0_SECRET (Base64,
+    # at least 32 bytes; index 0 signs, every listed key verifies). Required in the api role.
+    ttl: 30d                      # absolute lifetime from creation; no renewal
+    ephemeral-signing-key: false  # true only for local development and tests: a random key per start
   rate-limit:
     # Per-client token buckets in Redis, docs/PLAN.md §8.2. Fails open while Redis is unavailable.
     enabled: true
@@ -120,6 +126,9 @@ tastebuds:
       - method: GET
         pattern: /v1/meta
         cost: 1
+      - method: POST
+        pattern: /v1/sessions/anonymous
+        cost: 10
   observability:
     wide-events:
       exclude-paths:

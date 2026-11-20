@@ -1,6 +1,6 @@
 # 006 — Anonymous sessions: signed bearer tokens, `POST /v1/sessions/anonymous`, authentication
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-20
 - **Depends on:** 001 (DONE)
@@ -16,6 +16,19 @@
 4. **Rate limiting:** the session key adds a second bucket next to the IP bucket (task 007).
 5. Planner decisions confirmed: token code in `platform`, the endpoint in a new `sessions` module (§1);
    `anyRequest` → `hasRole("USER")` (§7); 401 for bad tokens on every path (§6).
+
+### Amended after review round 1 (2026-11-20)
+Round 2 changes only these points; everything else is accepted as implemented.
+1. §10 item 5 and AC 12: key rotation in three deploys (new key at index 1, then index 0, old key removed after one
+   TTL). Fix `docs/security/ANON_SESSIONS.md`; new test `the three-step rotation never rejects a token during a rolling deploy`.
+2. §2, §6 and AC 9: `AnonSessionPrincipal.toString()` without the session id; `AnonSessionAuthentication.getName()`
+   returns `anon-session`. Tests in `AnonSessionTokensTest` and `AnonSessionAuthenticationFilterTest`.
+3. §3 step 5 and AC 4: an expiry outside the `Instant` range → `MALFORMED`, never an exception. New test in
+   `AnonSessionTokensTest`.
+4. `AnonSessionIntegrationTest` position test: assert `CorsFilter` is present before the order assertion.
+5. New tests: `the ephemeral key logs exactly one warning` (AC 7) and
+   `the session response never shows the token in toString` (AC 9).
+Not in round 2: saving the context for async dispatch (`docs/backlog/2026-11-20-anon-session-context-async-dispatch.md`).
 
 ## Goal
 Signed-out users get an anonymous session (docs/PLAN.md §3.2 `sessions`, §4 `AnonSession`, D4; tastebuds_spec F01 §6:
@@ -74,7 +87,10 @@ data class AnonSessionPrincipal(
     val sessionId: UUID,
     /** Whole seconds; the token stops working at this instant. */
     val expiresAt: Instant,
-)
+) {
+    /** Never the session id: Spring Security logs principals, and `getName()` would fall back to this. */
+    override fun toString(): String = "AnonSessionPrincipal(sessionId=[REDACTED], expiresAt=$expiresAt)"
+}
 
 /** A newly created anonymous session and its bearer token. */
 class IssuedAnonSession(
@@ -145,7 +161,10 @@ internal class AnonSessionTokens(
   4. Compute the MAC of `tba1.<kid>.<payload>` and encode it; compare the encoded string with group 3 using
      `MessageDigest.isEqual` on the US-ASCII bytes (constant time; comparing encoded strings also rejects non-canonical
      Base64). Not equal → `BAD_SIGNATURE`. The payload is not decoded before this step.
-  5. Decode the payload (cannot fail after step 2), build the principal.
+  5. Decode the payload; the Base64 decoding cannot fail after step 2. If the expiry seconds are outside
+     `Instant.MIN.epochSecond..Instant.MAX.epochSecond` → `MALFORMED` (`Instant.ofEpochSecond` would throw
+     `DateTimeException`; check the range before the call, no try/catch). Only a key holder can sign such a token.
+     Then build the principal.
   6. `!clock.instant().isBefore(expiresAt)` → `EXPIRED`. Otherwise `Valid(principal)`.
 - `fromProperties`: if `signingKeys` is non-empty, use them (`Base64.getDecoder().decode(secret)`; the properties are
   already validated). Else if `ephemeralSigningKey`, use one key with id `ephemeral` and 32 bytes from `SecureRandom`,
@@ -243,7 +262,11 @@ internal class AnonSessionAuthentication(
     init { isAuthenticated = true }
     override fun getPrincipal(): AnonSessionPrincipal = principal
     override fun getCredentials(): Any? = null   // the token is not kept after verification
+    /** Fixed and non-identifying: `getName()` feeds `request.remoteUser` and Spring Security logs. */
+    override fun getName(): String = ANON_SESSION_NAME
 }
+
+internal const val ANON_SESSION_NAME = "anon-session"
 
 /** Not a Spring bean: it lives in the security chain only (same reason as RateLimitFilter). */
 internal class AnonSessionAuthenticationFilter(
@@ -383,7 +406,10 @@ them); values may.
   4. *Keys*: generate with `openssl rand -base64 32`; env variables of §4 (more keys: `_1_`, `_2_`); every `api`
      replica needs the same keys, the `worker` role needs none; `ephemeral-signing-key` only for local development
      and tests.
-  5. *Rotation*: add the new key at index 0 and keep the old one at index 1; deploy; after one TTL remove the old key.
+  5. *Rotation*, in three deploys, so that no replica ever receives a token signed with a key it does not know
+     (during a rolling deploy old and new replicas serve at the same time, and a 401 makes the client drop its
+     session): (1) add the new key at index 1 (it verifies only) and deploy to every `api` replica; (2) move the new
+     key to index 0 (the old key to index 1) and deploy; (3) after one TTL remove the old key and deploy.
      Leaked key: remove it at once; every session signed with it ends (clients create new ones).
   6. *Limits*: no revocation before Phase 4 (a stolen token works until it expires); no renewal; budgets are later
      work (docs/PLAN.md §5.6).
@@ -408,26 +434,32 @@ edits: about 400 lines with imports and KDoc. Docs about 80 lines.
    `detail=The bearer token is invalid or expired.`, `instance=<path>` and `WWW-Authenticate: Bearer error="invalid_token"`,
    identical for every reason and also on `permitAll` paths. The chain stops. The wide event has
    `auth.failure=invalid_token` and the `auth.failure_reason` of §9. The signature is checked before the expiry, in
-   constant time. Other schemes (`Basic …`) are ignored. `verify` never throws.
+   constant time. Other schemes (`Basic …`) are ignored. `verify` never throws, also not for a correctly signed token
+   whose expiry seconds are outside the `Instant` range: that token is `MALFORMED`.
 5. **Authorization.** `POST /v1/sessions/anonymous` is `permitAll`. Unlisted paths need `ROLE_USER`: no credentials →
    401 with `WWW-Authenticate: Bearer` (unchanged), a valid anonymous session → 403 problem+json. Existing tests pass
    unchanged.
 6. **Position.** The authentication filter is in Spring Security's chain exactly once, before
-   `AnonymousAuthenticationFilter` and after `CorsFilter`. No bean of type `AnonSessionAuthenticationFilter` exists.
+   `AnonymousAuthenticationFilter` and after `CorsFilter` (which is present in the chain). No bean of type
+   `AnonSessionAuthenticationFilter` exists.
    (The order relative to `RateLimitFilter` follows from both registrations and is tested in task 007.)
 7. **Keys and roles.** Properties and validation as in §4. Role `api` without keys and without
    `ephemeral-signing-key` fails startup with the §3 message. Role `worker` starts without keys and has neither
-   `AnonSessionTokens` nor the customizer. With `ephemeral-signing-key=true` and no keys, a random key is used and one
-   WARN is logged. With several keys, key 0 signs and every key verifies.
+   `AnonSessionTokens` nor the customizer. With `ephemeral-signing-key=true` and no keys, a random key is used and
+   exactly one WARN (the §3 text) is logged per `fromProperties` call, none per token. With several keys, key 0 signs
+   and every key verifies.
 8. **Cost.** `application.yaml` has the §8 rule: `POST /v1/sessions/anonymous` costs 10 tokens.
 9. **Privacy.** The token appears only in the creation response. Tokens, secrets and session ids never appear in a
    wide event or a log line. `toString()` of `IssuedAnonSession`, `AnonSessionResponse`,
    `AnonSessionProperties.SigningKey`, `AnonSessionTokens.Key` and `BearerCredential.Present` shows no token or secret.
-   Validation messages never contain a secret.
+   `AnonSessionPrincipal.toString()` and `AnonSessionAuthentication.toString()` do not contain the session id, and
+   `AnonSessionAuthentication.getName()` returns the fixed `anon-session`. Validation messages never contain a secret.
 10. **Modules.** `sessions` uses only public types of the `platform` base package; `ModularityTest` passes.
 11. **No committed keys.** The `test` profile and `bootTestRun` use the ephemeral key; tests generate key material at
     runtime; no Base64 key literal of 32 bytes or more is added anywhere.
 12. **Docs.** WIDE_EVENT_SCHEMA.md, SECURITY.md and ANON_SESSIONS.md as in §10; nothing else changes in the first two.
+    The rotation section of ANON_SESSIONS.md has the three deploys of §10 item 5 in that order (new key at index 1,
+    then at index 0, then the old key removed after one TTL) and the leaked-key line.
 
 ## Required tests
 Test names are the sentences below. Unit tests use a generated 32-byte secret and `Clock.fixed`.
@@ -448,7 +480,8 @@ internal object AnonSessionTestKeys {
 Every test in this task that needs a key or a hand-made token uses it, including `AnonSessionIntegrationTest` in the
 `sessions` test package (tests are not part of the Modulith verification). Task 007 reuses it without changing it.
 
-- `AnonSessionTokensTest` (unit, `platform/security`; AC 2, 4, 7, 9):
+- `AnonSessionTokensTest` (unit, `platform/security`; `@ExtendWith(OutputCaptureExtension::class)` as in
+  `RedisRateLimiterFailOpenTest`; AC 2, 4, 7, 9, 12):
   - `issued tokens verify and carry the session id and expiry` (format regex, length ≤ 128, `verify` returns the
     issued principal, `expiresAt` = fixed now + ttl in whole seconds)
   - `each session gets a new random id` (1 000 issues → 1 000 distinct ids)
@@ -461,6 +494,15 @@ Every test in this task that needs a key or a hand-made token uses it, including
   - `tokens with an unknown key id are rejected` (negative: `UNKNOWN_KEY`)
   - `older keys still verify after rotation and new tokens use the first key` (token from `[k1]` verifies with
     `[k2, k1]`; new tokens start with `tba1.k2.`)
+  - `the three-step rotation never rejects a token during a rolling deploy` (key lists `[k1]` → `[k1, k2]` →
+    `[k2, k1]` → `[k2]`, the §10 item 5 steps: for each pair of neighbouring lists, a token issued with either list
+    verifies with the other; negative, the one-step order the old text described: a token from `[k2, k1]` gets
+    `UNKNOWN_KEY` from `[k1]`)
+  - `a correctly signed token with an expiry outside the Instant range is malformed` (negative: the test signs the
+    token by hand with `javax.crypto.Mac` as in §3, with expiry seconds `Long.MAX_VALUE`, `Long.MIN_VALUE` and
+    `Instant.MAX.epochSecond + 1` → `MALFORMED`, no exception; `Instant.MAX.epochSecond` → `Valid`)
+  - `the ephemeral key logs exactly one warning` (one `fromProperties` call with `ephemeral-signing-key=true`, then
+    three `issue` and `verify` calls: the captured output contains the §3 WARN text exactly once)
   - `malformed tokens are rejected` (negative: `""`, `tba1`, `tba1...`, `tba2.` + a valid rest, a JWT-like
     `eyJhbGciOiJub25lIn0.e30.`, upper-case kid, `+` `/` `=` in the payload, payload of 31 and 33 characters, MAC of 42
     characters, leading or trailing space or line break, full-width digits, 129 characters, 10 000 characters →
@@ -471,7 +513,8 @@ Every test in this task that needs a key or a hand-made token uses it, including
   - `missing keys fail unless the ephemeral key is enabled` (`fromProperties`: no keys → `IllegalStateException` whose
     message starts with `tastebuds.anon-session.signing-keys`; ephemeral → issues verifiable tokens; two ephemeral
     instances reject each other's tokens with `BAD_SIGNATURE`)
-  - `toString never shows tokens or secrets` (`IssuedAnonSession`, `AnonSessionTokens.Key`, `BearerCredential.Present`)
+  - `toString never shows tokens or secrets` (`IssuedAnonSession`, `AnonSessionTokens.Key`, `BearerCredential.Present`;
+    `AnonSessionPrincipal.toString()` does not contain the session id)
 - `AnonSessionPropertiesTest` (unit; AC 7, 9): `defaults are valid` (30 d, no keys, ephemeral off);
   `invalid values are rejected` (one `assertFailsWith<IllegalArgumentException>` per row of the §4 table: ttl 59 min
   and 90 d + 1 s; ids `""`, 17 characters, `K1`, `k.1`; duplicate ids; secret `not base64!`; a secret of 31 bytes;
@@ -485,6 +528,8 @@ Every test in this task that needs a key or a hand-made token uses it, including
   test; AC 3, 4, 9):
   - `a valid token authenticates the request as an anonymous session` (captured authentication: type, authority,
     principal, null credentials; `principal.tier=anon`)
+  - `the authentication never reveals the session id` (captured authentication: `name` is `anon-session`;
+    `toString()` does not contain the session id) (AC 9)
   - `requests without credentials continue unauthenticated` (chain called, no authentication, no `auth.*` field)
   - `invalid tokens stop the request with a uniform 401 problem` (negative: malformed, unknown key, bad signature,
     expired: chain not called; status, header, body equal for all four; `auth.failure_reason` per case; neither body
@@ -521,10 +566,14 @@ Every test in this task that needs a key or a hand-made token uses it, including
   - `tokens and session ids never appear in logs` (after creating and using a session: the captured output contains
     neither the token nor the session id from `verify`) (AC 9)
   - `the anonymous security chain has the filter once, before anonymous authentication` (from
-    `FilterChainProxy.filterChains`: exactly one `AnonSessionAuthenticationFilter`, index after `CorsFilter`, before
-    `AnonymousAuthenticationFilter`; `getBeanNamesForType(AnonSessionAuthenticationFilter::class.java)` empty) (AC 6)
+    `FilterChainProxy.filterChains`: exactly one `AnonSessionAuthenticationFilter`; first assert that the index of
+    `CorsFilter` is ≥ 0, then that the filter's index is after it and before `AnonymousAuthenticationFilter`;
+    `getBeanNamesForType(AnonSessionAuthenticationFilter::class.java)` empty) (AC 6)
   - `session creation has its own rate-limit cost` (`@Autowired RateLimitProperties`: rules contain
     `Rule("POST", "/v1/sessions/anonymous", 10)`) (AC 8)
+  - `the session response never shows the token in toString` (`AnonSessionResponse(token = "<a real token>", …)`:
+    `toString()` does not contain the token and contains `[REDACTED]`; no Spring needed, a plain test method in
+    this class) (AC 9)
 
 ## Quality gates
 - `./gradlew check` passes (ktlint, detekt, unit + integration tests, ArchUnit, Spring Modulith verification).
@@ -544,3 +593,26 @@ Every test in this task that needs a key or a hand-made token uses it, including
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: SPEC_PROBLEM
+Code meets AC 1–12; `./gradlew check` green; scope clean. Blocked on the spec, not the code.
+1. (blocking) §10 item 5 key rotation ("new key at index 0, old at index 1; deploy") gives 401s during a rolling
+   deploy: new pods sign with a key old pods do not know (`UNKNOWN_KEY`), and the client drops a 401 token and loses
+   the session. Amend to: add the new key at index 1 (verify only), deploy; move it to index 0, deploy; after one TTL
+   remove the old key, deploy. Leaked-key line stays.
+2. (optional amendment) `AnonSessionPrincipal` uses the data-class `toString()`, which contains `sessionId`;
+   `AbstractAuthenticationToken.getName()` falls back to it, so `authentication.name`, `getRemoteUser()` and Spring
+   Security TRACE logs print the session id (AC 9 holds only at INFO).
+Backlog suggestions: save the authentication in the context repository (async dispatch); `Instant.ofEpochSecond` can
+throw in `verify` for an out-of-range expiry (key holder only); position test passes when `CorsFilter` is absent
+(index -1); tests for the single ephemeral-key WARN and `AnonSessionResponse.toString()`; ANON_SESSIONS.md has two
+true facts beyond the §10 list (nit).
+Process note: the implementer wrote three files with a Bash heredoc and ran `sed -i` once (all inside Allowed paths).
+
+### Round 2: APPROVE
+Spec amended after round 1 (rotation in three deploys; no session id in principal `toString()`/`getName()`;
+out-of-range expiry → `MALFORMED`; `CorsFilter` index asserted; tests for the single WARN and
+`AnonSessionResponse.toString()`). All five items verified in code and tests; `./gradlew check` green; scope clean.
+Findings: none.
+Backlog suggestion (nit): ANON_SESSIONS.md "Verification order" does not mention that an out-of-range expiry is
+`MALFORMED`.
