@@ -48,7 +48,18 @@ never (deprecate, then remove after 90 days, which is the digest retention).
 |---|---|---|
 | `auth.failure` | string | `unauthenticated` (401 from the entry point) or `access_denied` (403 from the access-denied handler); absent otherwise |
 
+### Rate limiting (`/v1/**` only)
+| Field | Type | Description |
+|---|---|---|
+| `rate_limit.outcome` | string | `allowed`, `rejected` (429) or `unavailable` (Redis unreachable or too slow; the request went through) |
+| `rate_limit.cost` | long | Tokens this request costs |
+| `rate_limit.remaining` | long | Tokens left in the client's bucket after this request; absent when `unavailable` |
+| `rate_limit.rule` | string | Matching rule (`GET /v1/meta`, `* /v1/...`) or `default`. Needed because `http.route` is `UNMATCHED` on a 429 |
+| `rate_limit.key_type` | string | `ip4`, `ip6` (the key is the /64) or `invalid` (unparsable address, one shared bucket) |
+
+Never the client address or the bucket key (personal data).
+
 ### Reserved namespaces (to be filled by their modules)
-`rate_limit.*` (task 001), `auth.*`, `principal.*` (`principal.tier`: `anon`, `user`, `admin`), `db.*`
+`auth.*`, `principal.*` (`principal.tier`: `anon`, `user`, `admin`), `db.*`
 (`db.query_count`), `llm.*` (`llm.model`, `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`, `llm.cache_hit`),
 `matching.*` (`matching.algo_version`, `matching.candidates`), `kafka.*`, `catalog.*`, `import.*`.

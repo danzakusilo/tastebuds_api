@@ -10,6 +10,7 @@ archunit = "1.5.1"
 otel-instrumentation = "2.28.0-alpha"
 # Build-logic override: Kover 0.9.11 brings 2.3.32 (CVE-2026-84939). Drop once Kover ships >= 2.3.35.
 freemarker = "2.3.35"
+bucket4j = "8.22.0"
 
 [libraries]
 # build-logic plugin classpath
@@ -27,6 +28,10 @@ spring-modulith-bom = { module = "org.springframework.modulith:spring-modulith-b
 
 # observability
 otel-logback-appender = { module = "io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0", version.ref = "otel-instrumentation" }
+
+# rate limiting
+bucket4j-core = { module = "com.bucket4j:bucket4j_jdk17-core", version.ref = "bucket4j" }
+bucket4j-lettuce = { module = "com.bucket4j:bucket4j_jdk17-lettuce", version.ref = "bucket4j" }
 
 # test
 archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }

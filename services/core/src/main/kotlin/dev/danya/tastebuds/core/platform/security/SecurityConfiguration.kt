@@ -23,6 +23,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 class SecurityConfiguration {
     @Bean
     fun apiSecurityFilterChain(http: HttpSecurity): SecurityFilterChain {
+        // Customizer<HttpSecurity> beans extend this chain: platform.ratelimit adds the rate limiter right after CorsFilter.
         http {
             // CSRF protection targets ambient credentials (cookies). This API accepts none, only bearer tokens.
             csrf { disable() }

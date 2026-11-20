@@ -13,3 +13,7 @@ management:
         enabled: false
   server:
     port: 0
+tastebuds:
+  rate-limit:
+    # Off unless a test turns it on and imports RedisTestcontainersConfiguration: other contexts have no Redis.
+    enabled: false
