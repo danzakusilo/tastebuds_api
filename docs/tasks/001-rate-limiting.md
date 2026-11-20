@@ -1,6 +1,6 @@
 # 001 — Cost-weighted rate limiting per client IP (Redis + Bucket4j)
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-20 (revised in place for the current `main`; first planned 2026-11-15,
   before tasks 002–005 and the 2026-11-20 revision of docs/PLAN.md)

@@ -1,7 +1,7 @@
 # Tastebuds API — Master Plan
 
 > Living document. Changes to scope or architecture go through a PR that edits this file.
-> Last revised: 2026-11-20 (client UX spec `tastebuds_spec`: D17–D20 added; §3.2 `library` module; §4 stars, library,
+> Last revised: 2026-11-20 (Phase 1: anon-session budgets move to Phase 3 with the cost meter). Earlier that day (client UX spec `tastebuds_spec`: D17–D20 added; §3.2 `library` module; §4 stars, library,
 > reactions, picks; §5.5 user links publish at once; §6 client contract, `GET /v1/explore` dropped (no client screen; Discover deals
 > user links only); Phases 3–5; risk register). Previous:
 > 2026-11-15 (post-review: D3, D4, D12 revised; D15, D16 added; phases re-ordered).
@@ -309,7 +309,9 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 - k3d cluster + Helm chart for core (`api`/`worker` deployments, probes, resources, security context), CloudNativePG,
   Redis; `make`/script for one-command local cluster. CI renders and lints the chart (`helm lint`, kubeconform).
 - DB roles (`app_rw`, `migrator`) with Flyway as a separate Job; jOOQ codegen pipeline.
-- Anonymous sessions (signed tokens, TTL, budgets) + rate limiting (task 001, Bucket4j/Redis, cost-weighted).
+- Anonymous sessions (signed tokens, 30-day TTL; task 006) + rate limiting (task 001 done, Bucket4j/Redis,
+  cost-weighted; a bucket per anon session in task 007). Per-session LLM budgets (§5.6) arrive with their first
+  consumer, the Phase 3 extraction worker and cost meter; until then the rate limiter bounds abuse.
 - Kafka (Strimzi on k3d) + Spring Modulith event externalization (D12).
 - Threat model v1, BOLA test harness, ZAP baseline in CI.
 - **Exit:** `helm install` on k3d serves `/v1/meta` with a wide event and trace in LGTM; anon session issued and rate-limited.
