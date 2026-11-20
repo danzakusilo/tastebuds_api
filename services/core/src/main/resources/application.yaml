@@ -25,6 +25,12 @@ spring:
     # only works when the app user owns the schema (V2 revokes `app_rw` access to flyway_schema_history).
     user: ${FLYWAY_USERNAME:${spring.datasource.username}}
     password: ${FLYWAY_PASSWORD:${spring.datasource.password}}
+  data:
+    redis:
+      # Rate-limit buckets (platform.ratelimit). The Helm chart sets REDIS_HOST; credentials, if any, via
+      # SPRING_DATA_REDIS_USERNAME / SPRING_DATA_REDIS_PASSWORD. Local dev: Testcontainers (bootTestRun).
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   mvc:
     problemdetails:
       enabled: false # handled by ProblemDetailsAdvice
@@ -101,6 +107,19 @@ tastebuds:
     allowed-origins: []
   web:
     max-request-body-size: 1MB # applies to every request body; bigger uploads get their own route-level limit later
+  rate-limit:
+    # Per-client token buckets in Redis, docs/PLAN.md §8.2. Fails open while Redis is unavailable.
+    enabled: true
+    capacity: 120          # burst size in tokens
+    refill-tokens: 120     # tokens added back per refill period (greedy)
+    refill-period: 1m
+    default-cost: 1        # tokens per /v1 request without a matching rule
+    timeout: 250ms         # Redis connect/command timeout; slower means fail open
+    reconnect-backoff: 5s  # pause between connect attempts while Redis is down
+    rules:                 # first match wins; method optional (absent = any method)
+      - method: GET
+        pattern: /v1/meta
+        cost: 1
   observability:
     wide-events:
       exclude-paths:

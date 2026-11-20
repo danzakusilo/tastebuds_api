@@ -28,7 +28,7 @@ Requirements: JDK 21, Docker.
 ```bash
 ./gradlew check                                        # full quality gate
 docker compose -f deploy/compose/compose.yaml up -d    # optional: Grafana on http://localhost:3000
-./gradlew :services:core:bootTestRun                   # core API on :8080 (Postgres via Testcontainers)
+./gradlew :services:core:bootTestRun                   # core API on :8080 (Postgres and Redis via Testcontainers)
 curl localhost:8080/v1/meta
 ```
 Then open Grafana → Explore → Tempo/Loki and search for service `tastebuds-core`.

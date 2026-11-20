@@ -1,6 +1,6 @@
 # 001 — Cost-weighted rate limiting per client IP (Redis + Bucket4j)
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-20 (revised in place for the current `main`; first planned 2026-11-15,
   before tasks 002–005 and the 2026-11-20 revision of docs/PLAN.md)
@@ -659,3 +659,21 @@ After merge, `CLAUDE.md` (Commands, `bootTestRun` line) still says "Testcontaine
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: APPROVE
+Orchestrator note: the implementer first stopped with SCOPE_BLOCKED because the documented root lock command rewrote the
+line-4 header comment of `build-logic/gradle.lockfile` (no dependency lines). The orchestrator restored the file with
+`git checkout` and filed `docs/backlog/2026-11-20-root-lock-command-rewrites-build-logic-header.md`; the implementer
+then completed the round.
+
+Findings: none blocking. All 15 acceptance criteria verified by the reviewer; `./gradlew :services:core:test --rerun
+check koverXmlReport` green (21 test classes, 0 failures); Kover `platform.ratelimit` 185/193 lines (95.9%);
+`scope.sh diff` clean; `bootTestRun` verified by hand (Postgres + Redis start, limits apply, no client address in wide
+events). Implementer deviations 1–5 accepted.
+
+Optional nits (not required):
+1. `RateLimitIntegrationTest.kt:180`: the CORS-order assertion also passes when `CorsFilter` is missing (`indexOfFirst` = -1).
+2. `RedisRateLimiterTest.kt:31-36`: per-test `RedisClient`s are never shut down (closed with the shared `ClientResources`).
+3. `gradle/libs.versions.toml:13`: `bucket4j` sits under the freemarker "Build-logic override" comment.
+
+Backlog suggestions filed: `2026-11-20-redis-health-contributor-all-roles.md`, `2026-11-20-lettuce-reconnect-log-volume.md`.
