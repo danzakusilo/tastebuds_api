@@ -46,7 +46,11 @@ never (deprecate, then remove after 90 days, which is the digest retention).
 ### Auth
 | Field | Type | Description |
 |---|---|---|
-| `auth.failure` | string | `unauthenticated` (401 from the entry point) or `access_denied` (403 from the access-denied handler); absent otherwise |
+| `auth.failure` | string | `unauthenticated` (401 from the entry point), `access_denied` (403 from the access-denied handler) or `invalid_token` (401: the bearer token is malformed, signed with an unknown key, forged or expired); absent otherwise |
+| `auth.failure_reason` | string | Only with `invalid_token`: `malformed`, `unknown_key`, `bad_signature` or `expired` |
+| `principal.tier` | string | `anon`: the request carries a valid anonymous session token. Absent without credentials (`user`, `admin` from Phase 4) |
+
+Never the token, the session id or a key id.
 
 ### Rate limiting (`/v1/**` only)
 | Field | Type | Description |
@@ -60,6 +64,6 @@ never (deprecate, then remove after 90 days, which is the digest retention).
 Never the client address or the bucket key (personal data).
 
 ### Reserved namespaces (to be filled by their modules)
-`auth.*`, `principal.*` (`principal.tier`: `anon`, `user`, `admin`), `db.*`
+`auth.*`, `principal.*`, `db.*`
 (`db.query_count`), `llm.*` (`llm.model`, `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`, `llm.cache_hit`),
 `matching.*` (`matching.algo_version`, `matching.candidates`), `kafka.*`, `catalog.*`, `import.*`.

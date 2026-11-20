@@ -17,3 +17,6 @@ tastebuds:
   rate-limit:
     # Off unless a test turns it on and imports RedisTestcontainersConfiguration: other contexts have no Redis.
     enabled: false
+  anon-session:
+    # A random signing key per test context, so no key is ever committed. Tests that mint tokens set their own keys.
+    ephemeral-signing-key: true
