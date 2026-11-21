@@ -14,7 +14,10 @@ import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.jdbc.datasource.DriverManagerDataSource
 import org.springframework.security.web.SecurityFilterChain
 import org.testcontainers.postgresql.PostgreSQLContainer
+import tools.jackson.databind.JsonNode
+import tools.jackson.databind.json.JsonMapper
 import java.util.UUID
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -108,11 +111,16 @@ class MigrationCommandIntegrationTest {
 
                 assertEquals(1, events.size)
                 assertCommon(events[0], "error")
-                assertNotNull(events[0]["error.class"])
+                assertEquals("org.flywaydb.core.internal.exception.FlywayMigrateException", events[0]["error.class"])
                 assertTrue(Regex("[0-9a-f]{12}").matches(events[0]["error.fingerprint"].toString()))
                 assertNull(events[0]["flyway.migrations_executed"])
                 assertNull(events[0]["flyway.schema_version"])
-                assertTrue(output.all.contains("app_rw"))
+                val failures = logRecords(output).filter { it.path("message").asString() == "Migration failed" }
+                assertEquals(1, failures.size, "expected one 'Migration failed' record")
+                val failure = failures.single()
+                assertEquals("ERROR", failure.at("/log/level").asString())
+                assertEquals(MigrationCommand::class.java.name, failure.at("/log/logger").asString())
+                assertContains(failure.at("/error/message").asString(), "role \"app_rw\" does not exist")
                 assertFalse(output.all.contains(password))
             }
     }
@@ -141,6 +149,15 @@ class MigrationCommandIntegrationTest {
             assertEquals(1, context.getBeansOfType(Flyway::class.java).size)
         }
     }
+
+    private val json = JsonMapper.builder().build()
+
+    /** Console log records (ECS JSON, one per line); lines that are not JSON are skipped. */
+    private fun logRecords(output: CapturedOutput): List<JsonNode> =
+        output.all
+            .lines()
+            .filter { it.startsWith("{") }
+            .mapNotNull { line -> runCatching { json.readTree(line) }.getOrNull() }
 
     private fun assertCommon(
         event: WideEvent,

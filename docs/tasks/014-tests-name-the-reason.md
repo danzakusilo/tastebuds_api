@@ -1,6 +1,6 @@
 # 014 — Tests name the failure reason: SQLSTATE in least-privilege tests, V2 default privileges, controllers only in the api role
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-21
 - **Depends on:** none
@@ -415,3 +415,9 @@ from the current main sources (`services/` is identical to `origin/main` 68a07fa
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: APPROVE
+Findings: none. All 9 acceptance criteria met (AC 1 command run by the reviewer: no change under src/main, test resources, build-logic or gradle). Tests: DatabaseIntegrationTest 8/8, MigrationCommandIntegrationTest 4/4, ArchitectureTest 5/5, ControllerRoleRuleTest 5/5; `./gradlew check` BUILD SUCCESSFUL, koverVerify passed. Mutation check in a scratch copy, each failing for the stated reason: annotation removed from AnonSessionController; MetaController set to Role.WORKER (2 violations); V2 sequence default removed (permission denied for sequence); log message renamed; DDL on a missing schema (3F000 vs 42501); read of a missing table (42P01 vs 42501); wrong reason text; V2 table default widened to ALL (truncate passes); logger.error changed to warn.
+Spec gaps (do not block): (1) rule 3: the CLAUDE.md roles contract also has a worker side (Kafka listeners and schedulers get Role.WORKER), which no rule enforces; no such class exists yet. (2) no rule (candidate "producers behind a contract claim"): functional endpoints (RouterFunction beans) are not covered by the controller rule; none exist today.
+Backlog: created docs/backlog/2026-11-21-role-rule-worker-side-and-router-functions.md and docs/backlog/2026-11-21-default-privileges-test-cleanup-masks-failure.md.
+Parallel mode: run in worktree tastebuds_api-task-014 without the scope-guard hook (user decision); scope checked by the reviewer (scope.sh diff) and the orchestrator.
