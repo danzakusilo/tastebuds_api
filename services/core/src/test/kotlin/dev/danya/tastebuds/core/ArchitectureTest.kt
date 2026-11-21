@@ -1,11 +1,19 @@
 package dev.danya.tastebuds.core
 
+import com.tngtech.archunit.base.DescribedPredicate
+import com.tngtech.archunit.core.domain.JavaAnnotation
 import com.tngtech.archunit.core.domain.JavaClasses
+import com.tngtech.archunit.core.domain.JavaEnumConstant
 import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.junit.AnalyzeClasses
 import com.tngtech.archunit.junit.ArchTest
+import com.tngtech.archunit.lang.ArchRule
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import com.tngtech.archunit.library.GeneralCodingRules
+import dev.danya.tastebuds.core.platform.ConditionalOnRole
+import dev.danya.tastebuds.core.platform.Role
+import org.springframework.stereotype.Controller
 
 /**
  * Project-wide rules that reviewers should never have to catch by hand.
@@ -36,5 +44,27 @@ class ArchitectureTest {
     @ArchTest
     fun `no java util logging`(classes: JavaClasses) {
         GeneralCodingRules.NO_CLASSES_SHOULD_USE_JAVA_UTIL_LOGGING.check(classes)
+    }
+
+    @ArchTest
+    fun `controllers exist only in the api role`(classes: JavaClasses) {
+        controllersOnlyInApiRole.check(classes)
+    }
+
+    companion object {
+        private val apiRole =
+            DescribedPredicate.describe("@ConditionalOnRole(Role.API)") { annotation: JavaAnnotation<*> ->
+                annotation.rawType.isEquivalentTo(ConditionalOnRole::class.java) &&
+                    (annotation.get("value").orElse(null) as? JavaEnumConstant)?.name() == Role.API.name
+            }
+
+        /** CLAUDE.md, Roles: HTTP controllers get @ConditionalOnRole(Role.API). Shared with ControllerRoleRuleTest. */
+        internal val controllersOnlyInApiRole: ArchRule =
+            classes()
+                .that()
+                .areMetaAnnotatedWith(Controller::class.java)
+                .should()
+                .beAnnotatedWith(apiRole)
+                .because("only the api role serves HTTP; a controller in the worker role fails startup or exposes an endpoint")
     }
 }

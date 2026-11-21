@@ -8,10 +8,13 @@ import org.springframework.context.annotation.Import
 import org.springframework.dao.DataAccessException
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.context.ActiveProfiles
+import java.sql.SQLException
 import javax.sql.DataSource
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 
 @SpringBootTest
@@ -48,7 +51,9 @@ class DatabaseIntegrationTest(
 
     @Test
     fun `the app role cannot change the schema`() {
-        assertFailsWith<DataAccessException> { jdbc.sql("create table core.should_not_exist(id int)").update() }
+        val error = assertFailsWith<DataAccessException> { jdbc.sql("create table core.should_not_exist(id int)").update() }
+
+        assertPermissionDenied(error, "permission denied for schema core")
 
         val exists =
             jdbc
@@ -93,8 +98,68 @@ class DatabaseIntegrationTest(
 
     @Test
     fun `the app role cannot read the migration history`() {
-        assertFailsWith<DataAccessException> {
-            jdbc.sql("select count(*) from core.flyway_schema_history").query(Long::class.javaObjectType).single()
+        val error =
+            assertFailsWith<DataAccessException> {
+                jdbc.sql("select count(*) from core.flyway_schema_history").query(Long::class.javaObjectType).single()
+            }
+
+        assertPermissionDenied(error, "permission denied for table flyway_schema_history")
+    }
+
+    @Test
+    fun `the app role cannot create objects in the public schema`() {
+        val error = assertFailsWith<DataAccessException> { jdbc.sql("create table public.should_not_exist(id int)").update() }
+
+        assertPermissionDenied(error, "permission denied for schema public")
+    }
+
+    @Test
+    fun `a table and a sequence that the migrator creates after V2 are usable by the app role`() {
+        val migrator = JdbcClient.create(flyway.configuration.dataSource)
+        try {
+            migrator.sql("create table core.default_privileges_probe(id bigint primary key, note text not null)").update()
+            migrator.sql("create sequence core.default_privileges_probe_seq").update()
+
+            val id = jdbc.sql("select nextval('core.default_privileges_probe_seq')").query(Long::class.javaObjectType).single()
+            val inserted =
+                jdbc.sql("insert into core.default_privileges_probe(id, note) values (:id, 'created')").param("id", id).update()
+            val updated =
+                jdbc.sql("update core.default_privileges_probe set note = 'updated' where id = :id").param("id", id).update()
+            val note =
+                jdbc
+                    .sql("select note from core.default_privileges_probe where id = :id")
+                    .param("id", id)
+                    .query(String::class.java)
+                    .single()
+            val deleted = jdbc.sql("delete from core.default_privileges_probe where id = :id").param("id", id).update()
+            val truncate = assertFailsWith<DataAccessException> { jdbc.sql("truncate core.default_privileges_probe").update() }
+
+            assertEquals(1, inserted)
+            assertEquals(1, updated)
+            assertEquals("updated", note)
+            assertEquals(1, deleted)
+            assertPermissionDenied(truncate, "permission denied for table default_privileges_probe")
+        } finally {
+            migrator.sql("drop table if exists core.default_privileges_probe").update()
+            migrator.sql("drop sequence if exists core.default_privileges_probe_seq").update()
         }
+    }
+
+    /** [error] must come from PostgreSQL SQLSTATE 42501 (insufficient_privilege) with [reason] in the server message. */
+    private fun assertPermissionDenied(
+        error: DataAccessException,
+        reason: String,
+    ) {
+        val cause =
+            assertNotNull(
+                generateSequence<Throwable>(error) { it.cause }.filterIsInstance<SQLException>().firstOrNull(),
+                "no SQLException in $error",
+            )
+        assertEquals(INSUFFICIENT_PRIVILEGE, cause.sqlState, "unexpected SQLSTATE: ${cause.message}")
+        assertContains(cause.message.orEmpty(), reason)
+    }
+
+    private companion object {
+        const val INSUFFICIENT_PRIVILEGE = "42501"
     }
 }
