@@ -122,6 +122,10 @@ tastebuds:
     default-cost: 1        # tokens per /v1 request without a matching rule
     timeout: 250ms         # Redis connect/command timeout; slower means fail open
     reconnect-backoff: 5s  # pause between connect attempts while Redis is down
+    session:                 # bucket per anonymous session, checked before the IP bucket; both must allow
+      capacity: 120
+      refill-tokens: 120
+      refill-period: 1m
     rules:                 # first match wins; method optional (absent = any method)
       - method: GET
         pattern: /v1/meta

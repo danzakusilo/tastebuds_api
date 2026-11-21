@@ -30,9 +30,15 @@ class RedisRateLimiterTest {
 
     private fun newClient(): RedisClient = RateLimitRedis.client(resources, details(), properties.timeout)
 
-    private fun limiter(client: RedisClient = newClient()): RedisRateLimiter {
-        val connection = LazyConnection({ RateLimitRedis.proxyManager(client, properties.timeout) }, Duration.ofSeconds(5))
-        return RedisRateLimiter(connection::getOrNull, properties)
+    private val sessionProperties =
+        properties.copy(session = RateLimitProperties.SessionLimit(2, 2, Duration.ofHours(1)))
+
+    private fun limiter(
+        props: RateLimitProperties = properties,
+        client: RedisClient = newClient(),
+    ): RedisRateLimiter {
+        val connection = LazyConnection({ RateLimitRedis.proxyManager(client, props.timeout) }, Duration.ofSeconds(5))
+        return RedisRateLimiter(connection::getOrNull, props)
     }
 
     /** Unique per call, so tests sharing one Redis never meet. */
@@ -86,6 +92,35 @@ class RedisRateLimiterTest {
             raw.connect().use { connection ->
                 val redisKey = bucketKeyPrefix(properties) + key.value
                 val ttl = connection.sync().pttl(redisKey)
+                assertTrue(ttl > 0, "pttl: $ttl")
+            }
+        } finally {
+            raw.shutdown()
+        }
+    }
+
+    @Test
+    fun `session keys use the session bucket configuration`() {
+        val limiter = limiter(sessionProperties)
+        val session = ClientKey("as:" + UUID.randomUUID(), ClientKeyType.SESSION)
+        assertEquals(RateLimitDecision.Allowed(1), limiter.tryConsume(session, 1))
+        assertEquals(RateLimitDecision.Allowed(0), limiter.tryConsume(session, 1))
+        assertIs<RateLimitDecision.Rejected>(limiter.tryConsume(session, 1))
+        val ip = uniqueKey()
+        assertEquals(RateLimitDecision.Allowed(2), limiter.tryConsume(ip, 1))
+        assertEquals(RateLimitDecision.Allowed(1), limiter.tryConsume(ip, 1))
+        assertEquals(RateLimitDecision.Allowed(0), limiter.tryConsume(ip, 1))
+    }
+
+    @Test
+    fun `session buckets live under the session prefix and expire when idle`() {
+        val session = ClientKey("as:" + UUID.randomUUID(), ClientKeyType.SESSION)
+        limiter(sessionProperties).tryConsume(session, 1)
+        val raw = RedisClient.create(resources, uri())
+        try {
+            raw.connect().use { connection ->
+                assertEquals("rl:2-2-3600000:", sessionBucketKeyPrefix(sessionProperties))
+                val ttl = connection.sync().pttl("rl:2-2-3600000:" + session.value)
                 assertTrue(ttl > 0, "pttl: $ttl")
             }
         } finally {

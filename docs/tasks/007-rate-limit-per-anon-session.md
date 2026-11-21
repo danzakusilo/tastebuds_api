@@ -1,6 +1,6 @@
 # 007 — Rate-limit bucket per anonymous session, in addition to the IP bucket
 
-- **Status:** READY (runs after 006 is merged)
+- **Status:** HANDOFF
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-20
 - **Depends on:** 006
@@ -230,3 +230,33 @@ runtime, never literals.
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: CHANGES_REQUESTED
+1. **The privacy test checks only its own session, not "any token or session id used in this class".**
+   `AnonSessionRateLimitIntegrationTest.kt:52` and `:133-143`. `issued` is an instance field and JUnit creates a new
+   instance per test, so the privacy test only checks the one session it issues itself. It also never sends a valid
+   session that the IP bucket rejects (`limited_by=ip`). Fix with either (a) the privacy test drives every limiter
+   branch itself (allowed, rejected by session, rejected by IP with valid sessions, invalid token) and checks all tokens
+   and session ids it issued; or (b) move the collection to the `companion object` and assert in an `@AfterEach` that
+   takes `CapturedOutput`.
+
+Non-blocking: add a second "smallest remaining" case with session 9 and IP 5 (`RateLimitFilterTest.kt:137-143`);
+update the `RateLimitFilter` KDoc ("from the client's bucket"); rename local `session` to `isSession` in
+`RedisRateLimiter.kt:59`.
+
+Process note: the implementer wrote the main-code edits with a Python heredoc via Bash, against
+`.claude/agents/implementer.md`. The reviewer read every affected file in full and found no collateral damage. The hook
+gap is already in `docs/backlog/2026-11-18-scope-guard-ignores-shell-writes.md`.
+
+Backlog: `docs/backlog/2026-11-21-rate-limit-no-refund-on-later-reject.md`,
+`docs/backlog/2026-11-21-client-key-tostring-leaks-identity.md`.
+
+
+### Round 2: APPROVE
+Finding 1 fixed with option (a): the privacy test drives every limiter branch (allowed, rejected by session, rejected by
+IP with valid sessions, invalid token) and checks every token and session id it issued. All three optional suggestions
+applied. `./gradlew :services:core:test --rerun check` passes; Kover line coverage of the ratelimit package is 216/224
+(96.4%). Scope check clean.
+
+Non-blocking notes: the privacy test does not assert the statuses of its first three requests (other tests cover that
+behaviour); `issued` could be a plain list.

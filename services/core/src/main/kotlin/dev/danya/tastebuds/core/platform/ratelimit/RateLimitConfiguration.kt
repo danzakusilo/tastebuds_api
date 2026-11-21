@@ -2,8 +2,10 @@ package dev.danya.tastebuds.core.platform.ratelimit
 
 import dev.danya.tastebuds.core.platform.ConditionalOnRole
 import dev.danya.tastebuds.core.platform.Role
+import dev.danya.tastebuds.core.platform.security.AnonSessionTokens
 import io.lettuce.core.RedisClient
 import io.lettuce.core.resource.ClientResources
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails
@@ -44,10 +46,12 @@ internal class RateLimitConfiguration {
     @Bean
     fun rateLimitSecurityCustomizer(
         keys: ClientKeyResolver,
+        sessions: ObjectProvider<AnonSessionTokens>,
         limiter: RateLimiter,
         properties: RateLimitProperties,
     ): Customizer<HttpSecurity> {
-        val filter = RateLimitFilter(keys, RequestCostResolver(properties), limiter)
+        val resolvers = listOfNotNull(sessions.ifAvailable?.let { AnonSessionClientKeyResolver(it) }, keys)
+        val filter = RateLimitFilter(resolvers, RequestCostResolver(properties), limiter)
         // CorsFilter = org.springframework.web.filter.CorsFilter
         return Customizer { http -> http.addFilterAfter(filter, CorsFilter::class.java) }
     }

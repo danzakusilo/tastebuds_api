@@ -34,6 +34,23 @@ class RateLimitPropertiesTest {
         assertEquals(Duration.ofSeconds(5), p.reconnectBackoff)
         assertEquals(emptyList(), p.rules)
         assertEquals("rl:120-120-60000:", bucketKeyPrefix(p))
+        assertEquals(RateLimitProperties.SessionLimit(120, 120, Duration.ofMinutes(1)), p.session)
+        assertEquals("rl:120-120-60000:", sessionBucketKeyPrefix(p))
+    }
+
+    @Test
+    fun `the session bucket key prefix changes with the session configuration`() {
+        val base = RateLimitProperties()
+        val prefixes =
+            setOf(
+                sessionBucketKeyPrefix(base),
+                sessionBucketKeyPrefix(base.copy(session = base.session.copy(capacity = 100))),
+                sessionBucketKeyPrefix(base.copy(session = base.session.copy(refillTokens = 60))),
+                sessionBucketKeyPrefix(base.copy(session = base.session.copy(refillPeriod = Duration.ofSeconds(30)))),
+            )
+        assertEquals(4, prefixes.size)
+        assertEquals(sessionBucketKeyPrefix(base), sessionBucketKeyPrefix(base.copy(capacity = 5)))
+        assertEquals(bucketKeyPrefix(base), bucketKeyPrefix(base.copy(session = base.session.copy(capacity = 5))))
     }
 
     @Test
@@ -44,6 +61,20 @@ class RateLimitPropertiesTest {
         assertRejected("$base.refill-tokens") { RateLimitProperties(refillTokens = 0) }
         assertRejected("$base.refill-tokens") { RateLimitProperties(refillTokens = 1_000_001) }
         assertRejected("$base.refill-period") { RateLimitProperties(refillPeriod = Duration.ofMillis(999)) }
+        val session = RateLimitProperties.SessionLimit()
+        assertRejected("$base.session.capacity") { RateLimitProperties(session = session.copy(capacity = 0)) }
+        assertRejected("$base.session.capacity") { RateLimitProperties(session = session.copy(capacity = 1_000_001)) }
+        assertRejected("$base.session.refill-tokens") { RateLimitProperties(session = session.copy(refillTokens = 0)) }
+        assertRejected("$base.session.refill-tokens") { RateLimitProperties(session = session.copy(refillTokens = 1_000_001)) }
+        assertRejected("$base.session.refill-period") {
+            RateLimitProperties(session = session.copy(refillPeriod = Duration.ofMillis(999)))
+        }
+        assertRejected("$base.default-cost") {
+            RateLimitProperties(capacity = 100, session = session.copy(capacity = 10), defaultCost = 11)
+        }
+        assertRejected("$base.rules[0].cost") {
+            RateLimitProperties(capacity = 100, session = session.copy(capacity = 10), rules = listOf(rule(cost = 11)))
+        }
         assertRejected("$base.default-cost") { RateLimitProperties(defaultCost = 0) }
         assertRejected("$base.default-cost") { RateLimitProperties(capacity = 10, defaultCost = 11) }
         assertRejected("$base.timeout") { RateLimitProperties(timeout = Duration.ZERO) }

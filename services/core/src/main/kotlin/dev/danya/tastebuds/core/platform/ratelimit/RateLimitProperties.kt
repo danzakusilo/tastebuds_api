@@ -12,6 +12,8 @@ data class RateLimitProperties(
     /** Tokens added back per [refillPeriod], greedily (spread evenly over the period). */
     val refillTokens: Long = DEFAULT_TOKENS,
     val refillPeriod: Duration = Duration.ofMinutes(1),
+    /** Bucket of each anonymous session, checked before the client's IP bucket (task 007). */
+    val session: SessionLimit = SessionLimit(),
     /** Tokens a `/v1` request costs when no rule matches. */
     val defaultCost: Long = 1,
     /** Redis connect and command timeout, and the deadline of one bucket operation. Slower means fail open. */
@@ -29,11 +31,25 @@ data class RateLimitProperties(
         val cost: Long,
     )
 
+    data class SessionLimit(
+        val capacity: Long = DEFAULT_TOKENS,
+        val refillTokens: Long = DEFAULT_TOKENS,
+        val refillPeriod: Duration = Duration.ofMinutes(1),
+    )
+
     init {
         require(capacity in 1..MAX_TOKENS) { "tastebuds.rate-limit.capacity must be between 1 and $MAX_TOKENS" }
         require(refillTokens in 1..MAX_TOKENS) { "tastebuds.rate-limit.refill-tokens must be between 1 and $MAX_TOKENS" }
         require(refillPeriod >= Duration.ofSeconds(1)) { "tastebuds.rate-limit.refill-period must be at least 1s" }
-        require(defaultCost in 1..capacity) { "tastebuds.rate-limit.default-cost must be between 1 and capacity" }
+        require(session.capacity in 1..MAX_TOKENS) { "tastebuds.rate-limit.session.capacity must be between 1 and $MAX_TOKENS" }
+        require(session.refillTokens in 1..MAX_TOKENS) {
+            "tastebuds.rate-limit.session.refill-tokens must be between 1 and $MAX_TOKENS"
+        }
+        require(session.refillPeriod >= Duration.ofSeconds(1)) { "tastebuds.rate-limit.session.refill-period must be at least 1s" }
+        val maxCost = minOf(capacity, session.capacity)
+        require(defaultCost in 1..maxCost) {
+            "tastebuds.rate-limit.default-cost must be between 1 and the smaller of capacity and session.capacity"
+        }
         require(!timeout.isZero && !timeout.isNegative && timeout <= MAX_TIMEOUT) {
             "tastebuds.rate-limit.timeout must be greater than 0 and at most 5s"
         }
@@ -42,7 +58,7 @@ data class RateLimitProperties(
         }
         rules.forEachIndexed { index, rule ->
             val name = "tastebuds.rate-limit.rules[$index]"
-            require(rule.cost in 1..capacity) { "$name.cost must be between 1 and capacity" }
+            require(rule.cost in 1..maxCost) { "$name.cost must be between 1 and the smaller of capacity and session.capacity" }
             require(rule.pattern.startsWith("/v1/")) { "$name.pattern must start with /v1/" }
             require(rule.method == null || rule.method in METHODS) {
                 "$name.method must be null or one of ${METHODS.joinToString(" ")}"
