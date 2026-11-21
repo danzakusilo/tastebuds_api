@@ -17,6 +17,9 @@ Highlights already in place:
 - Forwarded headers honoured only from internal proxies (client IP and scheme behind the ingress), see [docs/security/FORWARDED_HEADERS.md](docs/security/FORWARDED_HEADERS.md)
 - RFC 9457 problem+json for application errors, including 401/403 from Spring Security and 413 for oversized bodies; internals and stack traces never leave the server. Known gaps: CORS rejections and errors raised by the servlet container before the application (e.g. oversized headers) use the default body
 - Raw `java.sql.Statement` use is banned by an ArchUnit test; queries use jOOQ or bound parameters by convention and review. Known gap: string-built SQL passed to `JdbcClient`/jOOQ plain-SQL APIs is not yet detected automatically (planned Semgrep rule)
+- Least-privilege database roles: the app connects as a member of `app_rw` (data access in schema `core` only: no
+  DDL, no access to the migration history); migrations run as the non-superuser schema owner `migrator` in a separate
+  `migrate` process, and integration tests use the same roles. See [docs/deploy/DATABASE.md](docs/deploy/DATABASE.md)
 - Actuator on a separate, non-public port with only health/info exposed
 - Postgres statement timeout (5 s); request limits: headers 16 KB, any request body 1 MB (413 problem+json), form posts 1 MB
 - Per-client rate limiting on `/v1/**`: cost-weighted token buckets in Redis, keyed by client IP (IPv6 by /64) and, for requests with a valid anonymous session token, also by session (both buckets must allow), checked before authentication; over the limit: 429 problem+json with `Retry-After`. Fails open while Redis is unavailable

@@ -23,6 +23,8 @@ spring:
     # Own connection, not the app pool: no statement_timeout (migrations may legitimately run long) and the
     # schema-owning role (`migrator` in production, docs/PLAN.md §8.4). Falls back to the app credentials, which
     # only works when the app user owns the schema (V2 revokes `app_rw` access to flyway_schema_history).
+    # In Kubernetes the api and worker pods set SPRING_FLYWAY_ENABLED=false; the `migrate` command applies migrations
+    # as a separate Job before new pods start (docs/deploy/DATABASE.md).
     user: ${FLYWAY_USERNAME:${spring.datasource.username}}
     password: ${FLYWAY_PASSWORD:${spring.datasource.password}}
   data:
