@@ -41,3 +41,4 @@ judgement. Your edits are limited to the spec's status and review log (via `task
   - backlog items created
   - a suggested commit message (Conventional Commits, referencing the task ID)
 - Do not commit, push or open a PR unless the user asks.
+- Once the PR is open, suggest `/brief-pr <PR#>` (reality check and review brief).

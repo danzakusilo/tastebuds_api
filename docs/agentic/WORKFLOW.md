@@ -22,6 +22,9 @@ strong one, with scope enforced by tooling rather than by trust. A human sees on
                                                      │
                                                      ▼
                                      human handoff (diff, evidence, commit msg)
+                                                     │  human opens the PR
+                                                     ▼
+                              /brief-pr: explainer (Opus) → reality check + review brief
 ```
 
 ## Artifacts
@@ -29,8 +32,9 @@ strong one, with scope enforced by tooling rather than by trust. A human sees on
 |---|---|
 | `docs/tasks/NNN-*.md` | Task spec: goal, non-goals, **allowed paths**, design notes, acceptance criteria, required tests, gates, review log |
 | `docs/backlog/*.md` | Out-of-scope findings. Never fixed in place |
-| `.claude/agents/{planner,implementer,reviewer}.md` | Agent roles, models, tool limits |
-| `.claude/skills/{plan-task,run-task}/SKILL.md` | Orchestration entry points (`/plan-task`, `/run-task`) |
+| `.claude/agents/{planner,implementer,reviewer,explainer}.md` | Agent roles, models, tool limits |
+| `.claude/skills/{plan-task,run-task,brief-pr}/SKILL.md` | Orchestration entry points (`/plan-task`, `/run-task`, `/brief-pr`) |
+| `build/pr-brief/pr-N.md` | (git-ignored) Review brief of PR N from `/brief-pr`: over-engineering check, main ideas traced across files |
 | `.claude/hooks/scope-guard.sh` | PreToolUse hook: blocks Edit/Write outside the active task's allowed paths |
 | `scripts/agentic/scope.sh` | Same rules over a git diff; used by the reviewer and CI |
 | `scripts/agentic/task-meta.sh` | Orchestrator-only edits of the active spec's Status and Review log (the hook blocks file-tool edits to it) |
@@ -51,6 +55,8 @@ compares against the merge base.
 
 ## Why these models
 - Planning and review are where judgement matters and mistakes compound, so they get the strongest model (Opus).
+- The explainer judges over-engineering and explains a change to a human, so it also gets Opus. It runs in a fresh
+  context, so it sees the change without the loop's history.
 - Implementation of a well-specified task is mostly execution, so a cheaper model (Sonnet) is enough and keeps cost down.
 - To try Haiku as implementer, change `model:` in `.claude/agents/implementer.md`. Track approval-in-round-1 rate
   in the task review logs to compare.
@@ -62,4 +68,6 @@ ArchUnit + Spring Modulith boundary verification + Kover coverage floor (70% glo
 ## Human checkpoints
 - Approving a planner spec (READY) when it raised open questions.
 - Handoff: reading the diff and evidence, then committing / opening the PR.
+- After the PR is open: `/brief-pr <PR#>`, then deciding on its reality-check findings (simplify, backlog or keep)
+  and whether to post the brief as a PR comment.
 - Anything that changes `docs/PLAN.md` decisions.
