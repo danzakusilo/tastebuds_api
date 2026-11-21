@@ -1,6 +1,6 @@
 # 009 — Helm chart for core: api and worker Deployments, migration Job, restricted pod security, chart checks in CI
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-21
 - **Depends on:** 008

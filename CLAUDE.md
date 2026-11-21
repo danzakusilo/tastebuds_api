@@ -17,7 +17,7 @@ Open source, portfolio-grade, built to carry real traffic. **Read `docs/PLAN.md`
 ./gradlew check                         # everything CI runs: tests, ktlint, detekt, ArchUnit, Modulith, coverage
 ./gradlew ktlintFormat                  # auto-format before check
 ./gradlew :services:core:test --tests '*WideEvent*'
-./gradlew :services:core:bootTestRun    # run core locally with Testcontainers-managed Postgres (needs Docker)
+./gradlew :services:core:bootTestRun    # run core locally with Testcontainers-managed Postgres and Redis (needs Docker)
 docker compose -f deploy/compose/compose.yaml up -d   # Grafana LGTM at http://localhost:3000, OTLP on 4317/4318
 scripts/agentic/scope.sh diff docs/tasks/NNN-x.md     # check a diff against a task's allowed paths
 ```

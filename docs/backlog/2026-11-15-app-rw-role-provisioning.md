@@ -1,11 +1,13 @@
-# V2 migration requires an `app_rw` role that nothing outside tests creates
-- **Found during:** 002 (human review)
+# V2 migration requires an `app_rw` role that no deploy artifact creates yet
+- **Found during:** 002 (human review); narrowed after 008 (spec audit 2026-11-21)
 - **Location:** services/core/src/main/resources/db/migration/V2__app_rw_grants.sql
 - **Severity:** medium
-- **What:** V2 grants to `app_rw` and fails if the role is missing (by design). Only
-  `src/test/resources/testcontainers/postgres-init.sql` creates it; no deploy artifact or doc does. Running the app
-  against any other Postgres fails with "role app_rw does not exist". Separately, running without `FLYWAY_USERNAME`
-  only works when the app user owns the schema.
-- **Why it matters:** First deploy (Phase 1, k3d/CloudNativePG) and anyone running the app against their own database hit it.
-- **Suggested fix:** Phase 1 DB-roles task: provision `migrator` and `app_rw` (CloudNativePG managed roles or a bootstrap
-  SQL), run Flyway as a Job with `migrator`, and document required roles and env vars in README.
+- **What:** V2 grants to `app_rw` and fails if the role is missing (by design). Task 008 documented the role contract,
+  the bootstrap SQL for your own Postgres and the environment variables in docs/deploy/DATABASE.md, and the Helm chart
+  (009) runs Flyway as the `migrate` Job with the schema owner. Remaining: no deploy artifact provisions the roles
+  (`migrator`, `app_rw`, the runtime login role) in a cluster; only
+  `src/test/resources/testcontainers/postgres-init.sql` creates them.
+- **Why it matters:** The first cluster deploy (Phase 1, k3d/CloudNativePG) fails with "role app_rw does not exist"
+  until something provisions the roles.
+- **Suggested fix:** Task 010: provision the roles with CloudNativePG managed roles or bootstrap SQL, following
+  docs/deploy/DATABASE.md.
