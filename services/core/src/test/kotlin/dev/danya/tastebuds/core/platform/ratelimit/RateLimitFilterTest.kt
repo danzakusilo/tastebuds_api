@@ -18,17 +18,22 @@ class RateLimitFilterTest {
 
     private class FakeLimiter(
         private val decision: RateLimitDecision,
+        private val sessionDecision: RateLimitDecision = decision,
     ) : RateLimiter {
-        var calls = 0
+        val keys = mutableListOf<ClientKey>()
+        val calls get() = keys.size
 
         override fun tryConsume(
             key: ClientKey,
             cost: Long,
         ): RateLimitDecision {
-            calls++
-            return decision
+            keys += key
+            return if (key.type == ClientKeyType.SESSION) sessionDecision else decision
         }
     }
+
+    private val sessionKey = ClientKey("as:00000000-0000-4000-8000-000000000000", ClientKeyType.SESSION)
+    private val sessionResolver = ClientKeyResolver { sessionKey }
 
     private class Run(
         val limiter: FakeLimiter,
@@ -40,9 +45,11 @@ class RateLimitFilterTest {
     private fun run(
         decision: RateLimitDecision,
         path: String = "/v1/meta",
+        sessionDecision: RateLimitDecision? = null,
     ): Run {
-        val limiter = FakeLimiter(decision)
-        val filter = RateLimitFilter(IpClientKeyResolver(), RequestCostResolver(properties), limiter)
+        val limiter = if (sessionDecision == null) FakeLimiter(decision) else FakeLimiter(decision, sessionDecision)
+        val resolvers = if (sessionDecision == null) listOf(IpClientKeyResolver()) else listOf(sessionResolver, IpClientKeyResolver())
+        val filter = RateLimitFilter(resolvers, RequestCostResolver(properties), limiter)
         val request = MockHttpServletRequest("GET", path).apply { remoteAddr = clientAddress }
         val response = MockHttpServletResponse()
         val chain = MockFilterChain()
@@ -94,6 +101,53 @@ class RateLimitFilterTest {
     @Test
     fun `when the store is unavailable requests continue and the outcome says so`() {
         val run = run(RateLimitDecision.Unavailable)
+        assertNotNull(run.chain.request)
+        assertEquals("unavailable", run.event["rate_limit.outcome"])
+        assertNull(run.event["rate_limit.remaining"])
+    }
+
+    @Test
+    fun `the session bucket is checked before the IP bucket`() {
+        val run = run(RateLimitDecision.Allowed(9), sessionDecision = RateLimitDecision.Allowed(5))
+        assertEquals(listOf(ClientKeyType.SESSION, ClientKeyType.IP4), run.limiter.keys.map { it.type })
+        assertEquals("ip4", run.event["rate_limit.key_type"])
+    }
+
+    @Test
+    fun `a session over its limit is rejected without charging the IP bucket`() {
+        val run = run(RateLimitDecision.Allowed(9), sessionDecision = RateLimitDecision.Rejected(0, 7))
+        assertEquals(429, run.response.status)
+        assertEquals("7", run.response.getHeader("Retry-After"))
+        assertEquals("session", run.event["rate_limit.limited_by"])
+        assertEquals("rejected", run.event["rate_limit.outcome"])
+        assertEquals(listOf(ClientKeyType.SESSION), run.limiter.keys.map { it.type })
+        assertNull(run.chain.request)
+    }
+
+    @Test
+    fun `the IP bucket still limits requests with a session`() {
+        val run = run(RateLimitDecision.Rejected(0, 3), sessionDecision = RateLimitDecision.Allowed(5))
+        assertEquals(429, run.response.status)
+        assertEquals("3", run.response.getHeader("Retry-After"))
+        assertEquals("ip", run.event["rate_limit.limited_by"])
+        assertNull(run.chain.request)
+    }
+
+    @Test
+    fun `remaining is the smaller of both buckets`() {
+        val run = run(RateLimitDecision.Allowed(9), sessionDecision = RateLimitDecision.Allowed(5))
+        assertEquals("allowed", run.event["rate_limit.outcome"])
+        assertEquals(5L, run.event["rate_limit.remaining"])
+        assertNull(run.event["rate_limit.limited_by"])
+        assertNotNull(run.chain.request)
+        val ipSmaller = run(RateLimitDecision.Allowed(5), sessionDecision = RateLimitDecision.Allowed(9))
+        assertEquals(5L, ipSmaller.event["rate_limit.remaining"])
+    }
+
+    @Test
+    fun `an unavailable store is asked once and the request continues`() {
+        val run = run(RateLimitDecision.Allowed(9), sessionDecision = RateLimitDecision.Unavailable)
+        assertEquals(1, run.limiter.calls)
         assertNotNull(run.chain.request)
         assertEquals("unavailable", run.event["rate_limit.outcome"])
         assertNull(run.event["rate_limit.remaining"])

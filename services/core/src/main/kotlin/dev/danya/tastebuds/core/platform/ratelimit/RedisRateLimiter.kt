@@ -43,12 +43,11 @@ internal class RedisRateLimiter(
     properties: RateLimitProperties,
     private val nanoTime: () -> Long = System::nanoTime,
 ) : RateLimiter {
-    private val configuration =
-        BucketConfiguration
-            .builder()
-            .addLimit { it.capacity(properties.capacity).refillGreedy(properties.refillTokens, properties.refillPeriod) }
-            .build()
-    private val prefix = bucketKeyPrefix(properties)
+    private val ipConfiguration = configuration(properties.capacity, properties.refillTokens, properties.refillPeriod)
+    private val sessionConfiguration =
+        configuration(properties.session.capacity, properties.session.refillTokens, properties.session.refillPeriod)
+    private val ipPrefix = bucketKeyPrefix(properties)
+    private val sessionPrefix = sessionBucketKeyPrefix(properties)
     private val lastWarn = AtomicLong(NEVER)
 
     override fun tryConsume(
@@ -57,6 +56,9 @@ internal class RedisRateLimiter(
     ): RateLimitDecision =
         try {
             val manager = proxyManager() ?: return RateLimitDecision.Unavailable
+            val isSession = key.type == ClientKeyType.SESSION
+            val configuration = if (isSession) sessionConfiguration else ipConfiguration
+            val prefix = if (isSession) sessionPrefix else ipPrefix
             val probe = manager.builder().build(prefix + key.value) { configuration }.tryConsumeAndReturnRemaining(cost)
             if (probe.isConsumed) {
                 RateLimitDecision.Allowed(probe.remainingTokens)
@@ -70,6 +72,16 @@ internal class RedisRateLimiter(
             warnThrottled(e)
             RateLimitDecision.Unavailable
         }
+
+    private fun configuration(
+        capacity: Long,
+        refillTokens: Long,
+        refillPeriod: Duration,
+    ): BucketConfiguration =
+        BucketConfiguration
+            .builder()
+            .addLimit { it.capacity(capacity).refillGreedy(refillTokens, refillPeriod) }
+            .build()
 
     private fun warnThrottled(e: Exception) {
         val now = nanoTime()
@@ -137,6 +149,10 @@ internal object RateLimitRedis {
 /** `rl:<capacity>-<refillTokens>-<refillPeriodMillis>:`, e.g. `rl:120-120-60000:`. */
 internal fun bucketKeyPrefix(properties: RateLimitProperties): String =
     "rl:${properties.capacity}-${properties.refillTokens}-${properties.refillPeriod.toMillis()}:"
+
+/** `rl:<capacity>-<refillTokens>-<refillPeriodMillis>:` of the session bucket; session keys add `as:<uuid>`. */
+internal fun sessionBucketKeyPrefix(properties: RateLimitProperties): String =
+    "rl:${properties.session.capacity}-${properties.session.refillTokens}-${properties.session.refillPeriod.toMillis()}:"
 
 /** Whole seconds, rounded up, at least 1. */
 internal fun retryAfterSeconds(nanosToWait: Long): Long = maxOf(1L, Math.ceilDiv(nanosToWait, NANOS_PER_SECOND))

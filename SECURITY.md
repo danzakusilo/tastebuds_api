@@ -19,7 +19,7 @@ Highlights already in place:
 - Raw `java.sql.Statement` use is banned by an ArchUnit test; queries use jOOQ or bound parameters by convention and review. Known gap: string-built SQL passed to `JdbcClient`/jOOQ plain-SQL APIs is not yet detected automatically (planned Semgrep rule)
 - Actuator on a separate, non-public port with only health/info exposed
 - Postgres statement timeout (5 s); request limits: headers 16 KB, any request body 1 MB (413 problem+json), form posts 1 MB
-- Per-client rate limiting on `/v1/**`: cost-weighted token buckets in Redis, keyed by client IP (IPv6 by /64) and checked before authentication; over the limit: 429 problem+json with `Retry-After`. Fails open while Redis is unavailable
+- Per-client rate limiting on `/v1/**`: cost-weighted token buckets in Redis, keyed by client IP (IPv6 by /64) and, for requests with a valid anonymous session token, also by session (both buckets must allow), checked before authentication; over the limit: 429 problem+json with `Retry-After`. Fails open while Redis is unavailable
 - Anonymous sessions (`POST /v1/sessions/anonymous`): HMAC-SHA256-signed bearer tokens with a fixed lifetime (30 days by default), verified without server state; invalid or expired tokens get one uniform 401 problem+json. A session opens only endpoints whose rule allows it; unlisted paths need a signed-in account. Format and key rotation: [docs/security/ANON_SESSIONS.md](docs/security/ANON_SESSIONS.md)
 - Distroless non-root container image; Trivy, CodeQL, gitleaks and Renovate in CI
 - Telemetry redaction of sensitive fields at the source

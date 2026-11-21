@@ -1,12 +1,16 @@
 package dev.danya.tastebuds.core.platform.ratelimit
 
+import dev.danya.tastebuds.core.platform.security.AnonSessionTokens
+import dev.danya.tastebuds.core.platform.security.AnonSessionVerification
+import dev.danya.tastebuds.core.platform.security.BearerCredential
+import dev.danya.tastebuds.core.platform.security.BearerCredentials
 import jakarta.servlet.http.HttpServletRequest
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.UnknownHostException
 
-internal enum class ClientKeyType { IP4, IP6, INVALID }
+internal enum class ClientKeyType { IP4, IP6, INVALID, SESSION }
 
 /** [value] is the bucket identity. Never log it or put it in a wide event or response; [type] is safe to record. */
 internal data class ClientKey(
@@ -14,9 +18,20 @@ internal data class ClientKey(
     val type: ClientKeyType,
 )
 
-/** Chooses whose bucket a request draws from. Phase 1 sessions and Phase 4 users add implementations (docs/PLAN.md §8.2). */
+/** Chooses one bucket a request draws from; null when this resolver has no key for the request. */
 internal fun interface ClientKeyResolver {
-    fun resolve(request: HttpServletRequest): ClientKey
+    fun resolve(request: HttpServletRequest): ClientKey?
+}
+
+/** Keys by the anonymous session of a valid bearer token (signature and expiry checked, no I/O); null otherwise. */
+internal class AnonSessionClientKeyResolver(
+    private val tokens: AnonSessionTokens,
+) : ClientKeyResolver {
+    override fun resolve(request: HttpServletRequest): ClientKey? {
+        val credential = BearerCredentials.from(request) as? BearerCredential.Present ?: return null
+        val verification = tokens.verify(credential.token) as? AnonSessionVerification.Valid
+        return verification?.let { ClientKey("as:${it.principal.sessionId}", ClientKeyType.SESSION) }
+    }
 }
 
 /** Keys by `request.remoteAddr` (resolved from trusted proxies only, docs/security/FORWARDED_HEADERS.md). */
