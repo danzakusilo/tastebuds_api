@@ -28,9 +28,14 @@ Verification order: length at most 128; the whole token matches the format; the 
 401 problem+json with `WWW-Authenticate: Bearer error="invalid_token"`. Only the wide event records the reason.
 
 ## Keys
-- Generate a key with `openssl rand -base64 32`.
-- Set `TASTEBUDS_ANONSESSION_SIGNINGKEYS_0_ID` and `TASTEBUDS_ANONSESSION_SIGNINGKEYS_0_SECRET` from a secret. More keys
-  use `_1_`, `_2_`.
+- Set `TASTEBUDS_ANONSESSION_SIGNINGKEYS_<n>_ID` and `TASTEBUDS_ANONSESSION_SIGNINGKEYS_<n>_SECRET` from a secret.
+  `<n>` is the index of the key in the list: index 0 signs new tokens, and every key in the list verifies. The indices
+  must run 0, 1, 2, ... with no gap and no leading zero (`_01_` is not index 1). A gap or a leading zero leaves
+  variables unbound, and the `api` role fails at startup. It also fails at startup without any key.
+- Generate a secret with `openssl rand -base64 32 | tr -d '\n'`. The value must be one line without a trailing
+  newline: the Base64 decoder rejects the newline that `openssl rand -base64 32` writes, and startup fails with
+  `tastebuds.anon-session.signing-keys[<n>].secret must be Base64 of at least 32 bytes`. A Secret created with
+  `kubectl create secret generic --from-file` keeps the newline at the end of the file.
 - Every `api` replica needs the same keys. The `worker` role needs none.
 - `tastebuds.anon-session.ephemeral-signing-key=true` gives a random key per start. Use it for local development and
   tests only: tokens stop working on restart and are not shared between replicas.
@@ -41,9 +46,30 @@ receive a token signed with a key it does not know, because a 401 makes the clie
 
 1. Add the new key at index 1. It verifies only. Deploy to every `api` replica.
 2. Move the new key to index 0 and the old key to index 1. Deploy.
-3. After one TTL, remove the old key. Deploy.
+3. Wait until the step 2 rollout has finished on every `api` replica, then wait one token lifetime and one hour more
+   (a margin for old pods that are still shutting down). Then remove the old key. Deploy.
 
-A leaked key: remove it at once. Every session signed with it ends, and clients create new ones.
+The token lifetime is `tastebuds.anon-session.ttl` (environment variable `TASTEBUDS_ANONSESSION_TTL`): 30 days by
+default, from 1 hour to 90 days. Replicas of the old release sign with the old key until the step 2 rollout ends, and
+each token keeps the lifetime that was set when it was issued. If the lifetime changed while the old key signed, wait
+for the longest value.
+
+## Leaked key
+Take the leaked key out of service at once, but always deploy a valid key list:
+
+1. Write the key list again without the leaked key. Move the remaining keys down so that the indices run 0, 1, 2, ...
+   with no gap. If no key remains, put a new key at index 0.
+2. Deploy to every `api` replica.
+
+Deleting only the variables of the leaked key works only when it has the highest index and another key remains. In
+every other case the list has a gap or no key: the new `api` pods fail at startup and the rollout stops (the Helm
+chart rolls out with `maxUnavailable: 0`). The old pods keep serving with the list they started with: they accept the
+leaked key, and if it is at index 0 they also sign new tokens with it. The chart reads every key from one Secret, so
+an old pod that restarts after the Secret was edited reads the broken list and fails at startup too.
+
+Every session signed with the leaked key ends, and clients create new ones. During the rollout, old pods reject tokens
+signed with a key that only the new pods know, and new pods reject tokens signed with the leaked key. A client that
+gets a 401 creates a new session, so a client can lose its session more than once during the rollout.
 
 ## Limits
 - No revocation before Phase 4: a stolen token works until it expires.

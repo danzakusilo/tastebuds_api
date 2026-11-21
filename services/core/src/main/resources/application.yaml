@@ -46,8 +46,9 @@ server:
     include-message: never
     include-binding-errors: never
   # Behind a TLS-terminating ingress. X-Forwarded-For/-Proto are honoured only from internal proxies, see
-  # docs/security/FORWARDED_HEADERS.md. Narrow the trusted range per environment with
-  # SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES (comma-separated CIDR list, e.g. 10.1.0.0/16; replaces the default).
+  # docs/security/FORWARDED_HEADERS.md. SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES replaces Boot's default trusted range
+  # (comma-separated CIDR list, e.g. 10.1.0.0/16). A CIDR list can make Tomcat resolve host names from X-Forwarded-For.
+  # No range holds only the ingress pods: limit who can connect to the api pods with a NetworkPolicy instead.
   forward-headers-strategy: native
   tomcat:
     connection-timeout: 10s
@@ -115,6 +116,9 @@ tastebuds:
     # at least 32 bytes; index 0 signs, every listed key verifies). Required in the api role.
     ttl: 30d                      # absolute lifetime from creation; no renewal
     ephemeral-signing-key: false  # true only for local development and tests: a random key per start
+  # Changing capacity, refill-tokens or refill-period (top level or under session) changes the Redis key prefix of
+  # those buckets: every client, an attacker too, gets a new full bucket, and during a rolling deploy old and new pods
+  # count in separate buckets.
   rate-limit:
     # Per-client token buckets in Redis, docs/PLAN.md §8.2. Fails open while Redis is unavailable.
     enabled: true
