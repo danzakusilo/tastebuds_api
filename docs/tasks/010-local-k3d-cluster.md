@@ -18,7 +18,7 @@ criterion.
 
 ## Non-goals
 - Deploying core, LGTM or a smoke test (011). Building images.
-- Ingress controller (Traefik is disabled), TLS, NetworkPolicies, backups, more than one Postgres instance, PgBouncer,
+- Ingress controller (Traefik, PLAN D21, stays disabled until a task adds ingress), TLS, NetworkPolicies, backups, more than one Postgres instance, PgBouncer,
   `sslmode=verify-full` for the app's database connection (Phase 6).
 - Redis authentication or persistence (local only; rate-limit buckets are ephemeral and the limiter fails open).
 - Kafka/Strimzi (Phase 1 item "Kafka + event externalization", a later task).

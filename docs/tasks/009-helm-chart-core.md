@@ -17,7 +17,7 @@ installs this chart there.
 
 ## Non-goals
 - Ingress or Gateway API, TLS, NetworkPolicies, PodDisruptionBudget, HPA, topology spread, Linkerd (Phase 6; the
-  ingress controller is not chosen yet).
+  ingress controller is Traefik, PLAN D21).
 - `values.schema.json` (add once the values settle), `nodeSelector`/`tolerations`/`affinity`/`podAnnotations`/
   `imagePullSecrets` values (add when a target needs them).
 - Creating Secrets in the chart, or any secret value in values files. Publishing the chart or images, image signing.

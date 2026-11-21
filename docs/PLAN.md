@@ -1,7 +1,8 @@
 # Tastebuds API — Master Plan
 
 > Living document. Changes to scope or architecture go through a PR that edits this file.
-> Last revised: 2026-11-20 (Phase 1: anon-session budgets move to Phase 3 with the cost meter). Earlier that day (client UX spec `tastebuds_spec`: D17–D20 added; §3.2 `library` module; §4 stars, library,
+> Last revised: 2026-11-21 (D21: Traefik ingress; Phase 1: tasks 008–011, jOOQ codegen before Phase 2, k3d smoke test in
+> CI with the ZAP task). 2026-11-20: Phase 1 anon-session budgets move to Phase 3 with the cost meter. Earlier that day (client UX spec `tastebuds_spec`: D17–D20 added; §3.2 `library` module; §4 stars, library,
 > reactions, picks; §5.5 user links publish at once; §6 client contract, `GET /v1/explore` dropped (no client screen; Discover deals
 > user links only); Phases 3–5; risk register). Previous:
 > 2026-11-15 (post-review: D3, D4, D12 revised; D15, D16 added; phases re-ordered).
@@ -45,13 +46,14 @@ emphasis on **observability, iteration speed, agentic development, security, and
 | D18 | Ratings | **0.5–5 stars** in half steps, stored and shown; `sentiment` −2..+2 is **derived** from the rating | Added 2026-11-20 (spec F02 §7 Q3). Imports and the design system use stars. A take may have text and no rating |
 | D19 | User-proposed vibe links ("connections") | **Publish at once**; reports and takedown come later. One per user per unordered media pair, note required | Added 2026-11-20 (spec F05 §7 Q1–Q4). Was "moderated" (§5.5). Every external link in user text opens behind a client warning dialog (spec C02) |
 | D20 | Visibility | Every user's takes and links **feed matching and stats**. At sign-up the user picks **Public** or **Anonymous**: an anonymous account is never shown with a handle, avatar or id to others | Added 2026-11-20 (spec F05 §7 Q6, F08). Replaces "opt-in visibility" in §12; the sign-up notice discloses the use. Not the signed-out anon session |
+| D21 | Ingress | **Traefik** (ships with k3s) | Added 2026-11-21: replaces "Envoy Gateway / NGINX" in §3, because the community ingress-nginx project was retired in March 2026. Lighter on the §10 memory budget. Disabled on the local k3d cluster until a task adds ingress |
 
 ## 3. Architecture
 
 ```
                  ┌───────────── Cloudflare (Phase 6: DDoS, WAF, bot mgmt, TLS) ─────────────┐
                  │                                                                          │
-           ┌─────▼─────┐      Ingress (Envoy Gateway / NGINX): TLS, rate limits, size limits
+           ┌─────▼─────┐      Ingress (Traefik, D21): TLS, rate limits, size limits
            │  Ingress  │
            └──┬─────┬──┘
    OIDC/OAuth2│     │ REST /v1 (JWT bearer)
@@ -309,12 +311,14 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 - k3d cluster + Helm chart for core (`api`/`worker` deployments, probes, resources, security context), CloudNativePG,
   Redis; `make`/script for one-command local cluster. CI renders and lints the chart (`helm lint`, kubeconform).
   Planned: chart (task 009), local k3d platform (task 010), deploy + exit-criterion smoke test (task 011).
-- DB roles (`app_rw`, `migrator`) with Flyway as a separate Job (task 008); jOOQ codegen pipeline.
+- DB roles (`app_rw`, `migrator`) with Flyway as a separate Job (task 008); jOOQ codegen pipeline (a separate spec before
+  Phase 2, planned with the first real tables; there are none yet).
 - ✅ Anonymous sessions (signed tokens, 30-day TTL; task 006 done) + rate limiting (task 001 done, Bucket4j/Redis,
   cost-weighted; a bucket per anon session, task 007 done). Per-session LLM budgets (§5.6) arrive with their first
   consumer, the Phase 3 extraction worker and cost meter; until then the rate limiter bounds abuse.
 - Kafka (Strimzi on k3d) + Spring Modulith event externalization (D12).
-- Threat model v1, BOLA test harness, ZAP baseline in CI.
+- Threat model v1, BOLA test harness, ZAP baseline in CI. The ZAP task first boots k3d in CI and runs the
+  task 011 smoke test there (one ephemeral cluster for both).
 - **Exit:** `helm install` on k3d serves `/v1/meta` with a wide event and trace in LGTM; anon session issued and rate-limited.
 
 ### Phase 2: Catalog and takes (vertical slice 1)
