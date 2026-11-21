@@ -100,6 +100,7 @@ class RateLimitIntegrationTest(
         assertEquals("GET /v1/meta", events[0].at("/rate_limit/rule").asString())
         assertEquals("ip4", events[0].at("/rate_limit/key_type").asString())
         assertEquals("rejected", events[1].at("/rate_limit/outcome").asString())
+        assertEquals("tokens", events[1].at("/rate_limit/reject_reason").asString())
         assertEquals(429, events[1].at("/http/response/status_code").asInt())
         assertFalse(
             output.out
