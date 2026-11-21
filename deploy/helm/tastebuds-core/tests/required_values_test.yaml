@@ -1,0 +1,61 @@
+suite: required values
+# Helm renders all templates in one pass, in reverse lexical order of their paths (serviceaccount, service,
+# job-migrate, deployment-worker, deployment-api), and stops at the first failed `required`. helm-unittest reports
+# that error only for the template that failed; every other template shows "No failed document". So each test
+# targets the template that fails first. The worker renders before the api, so `worker.enabled: false` is set where
+# the api must fail first. A new template that sorts after job-migrate.yaml and reads a required value changes
+# these targets.
+values:
+  - ../ci/ci-values.yaml
+tests:
+  - it: fails without environment
+    template: templates/job-migrate.yaml
+    set:
+      environment: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "environment is required"
+  - it: fails without database.url
+    template: templates/job-migrate.yaml
+    set:
+      database.url: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "database.url is required"
+  - it: fails without database.appSecret
+    template: templates/deployment-api.yaml
+    set:
+      database.appSecret: ""
+      worker.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "database.appSecret is required"
+  - it: fails without redis.host
+    template: templates/deployment-api.yaml
+    set:
+      redis.host: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "redis.host is required"
+  - it: fails without anonSession.existingSecret
+    template: templates/deployment-api.yaml
+    set:
+      anonSession.existingSecret: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "anonSession.existingSecret is required"
+  - it: fails without otel.endpoint
+    template: templates/deployment-api.yaml
+    set:
+      otel.endpoint: ""
+      worker.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "otel.endpoint is required"
+  - it: fails without database.migratorSecret
+    template: templates/job-migrate.yaml
+    set:
+      database.migratorSecret: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "database.migratorSecret is required"

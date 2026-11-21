@@ -1,0 +1,157 @@
+suite: api deployment
+templates:
+  - templates/deployment-api.yaml
+values:
+  - ../ci/ci-values.yaml
+tests:
+  - it: runs the api role and never migrates
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: TASTEBUDS_ROLE, value: api}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SPRING_FLYWAY_ENABLED, value: "false"}
+
+  - it: reads database credentials from the app secret only
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            valueFrom: {secretKeyRef: {name: ci-db-app, key: username}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+            valueFrom: {secretKeyRef: {name: ci-db-app, key: password}}
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.valueFrom.secretKeyRef.name == 'ci-db-migrator')]"
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'FLYWAY_USERNAME')]"
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'FLYWAY_PASSWORD')]"
+
+  - it: loads the signing keys from the anon-session secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {secretRef: {name: ci-anon-session}}
+
+  - it: configures redis, the pool and the otlp endpoint
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 10
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: REDIS_HOST, value: ci-redis}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: REDIS_PORT, value: "6379"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: DATABASE_POOL_SIZE, value: "10"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://ci-otel:4318"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: TASTEBUDS_ENV, value: ci}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: DATABASE_URL, value: "jdbc:postgresql://ci-db-rw:5432/tastebuds"}
+
+  - it: probes the health groups on the management port
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe
+          value:
+            httpGet: {path: /actuator/health/liveness, port: management}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 36
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe
+          value:
+            httpGet: {path: /actuator/health/liveness, port: management}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe
+          value:
+            httpGet: {path: /actuator/health/readiness, port: management}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: http, containerPort: 8080}
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: management, containerPort: 8081}
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+
+  - it: runs with the restricted pod security profile
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.enableServiceLinks
+          value: false
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile: {type: RuntimeDefault}
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: tmp, mountPath: /tmp}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+
+  - it: uses the chart app version when no image tag is set
+    set:
+      image.tag: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: tastebuds-core:0.1.0-SNAPSHOT
+
+  - it: appends extra environment variables
+    set:
+      extraEnv:
+        - name: SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES
+          value: "10\\..*"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES, value: "10\\..*"}
+
+  - it: rolls out one pod at a time without losing capacity
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate: {maxSurge: 1, maxUnavailable: 0}

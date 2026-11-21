@@ -1,0 +1,54 @@
+# tastebuds-core: the core service (api + worker roles of one image) and its migration Job (pre-install/pre-upgrade).
+# Postgres, Redis, the OTLP endpoint and every Secret come from the environment, see README.md. Never put secrets here.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: tastebuds-core
+  tag: ""                  # default: the chart's appVersion
+  pullPolicy: IfNotPresent
+
+environment: ""            # required: TASTEBUDS_ENV (deployment.environment in telemetry), e.g. local, staging, prod
+
+database:
+  url: ""                  # required: JDBC URL, e.g. jdbc:postgresql://tastebuds-db-rw:5432/tastebuds
+  appSecret: ""            # required: kubernetes.io/basic-auth Secret (username, password) of the runtime login role (member of app_rw)
+  migratorSecret: ""       # required: kubernetes.io/basic-auth Secret of the schema owner; only the migration Job reads it
+  poolSize: 10
+
+redis:
+  host: ""                 # required (api only: rate limiting)
+  port: 6379
+
+anonSession:
+  existingSecret: ""       # required: Secret whose keys are the env names TASTEBUDS_ANONSESSION_SIGNINGKEYS_<n>_ID/_SECRET (api only)
+
+otel:
+  endpoint: ""             # required: OTLP/HTTP base URL; the app appends /v1/traces, /v1/logs, /v1/metrics
+
+extraEnv: []               # extra non-secret env vars for api and worker: list of {name, value}
+
+api:
+  replicas: 2
+  resources:
+    requests: {cpu: 250m, memory: 768Mi}
+    limits: {memory: 768Mi}
+
+worker:
+  enabled: true
+  replicas: 1
+  resources:
+    requests: {cpu: 250m, memory: 768Mi}
+    limits: {memory: 768Mi}
+
+migration:
+  connectRetries: 6        # Flyway connection attempts while the database is not reachable yet (backoff 1 s, 2 s, 4 s, ...)
+  activeDeadlineSeconds: 600
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 512Mi}
+
+service:
+  port: 80
+
+terminationGracePeriodSeconds: 45

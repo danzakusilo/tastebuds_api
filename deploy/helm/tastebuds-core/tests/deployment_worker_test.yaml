@@ -1,0 +1,82 @@
+suite: worker deployment
+templates:
+  - templates/deployment-worker.yaml
+values:
+  - ../ci/ci-values.yaml
+tests:
+  - it: runs the worker role and never migrates
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: TASTEBUDS_ROLE, value: worker}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SPRING_FLYWAY_ENABLED, value: "false"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            valueFrom: {secretKeyRef: {name: ci-db-app, key: username}}
+
+  - it: gets no signing keys and no redis
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 9
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'REDIS_HOST')]"
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'REDIS_PORT')]"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MANAGEMENT_HEALTH_REDIS_ENABLED, value: "false"}
+
+  - it: never receives the migrator credentials
+    asserts:
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.valueFrom.secretKeyRef.name == 'ci-db-migrator')]"
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'FLYWAY_USERNAME')]"
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'FLYWAY_PASSWORD')]"
+
+  - it: runs with the restricted pod security profile
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.enableServiceLinks
+          value: false
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile: {type: RuntimeDefault}
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: tmp, mountPath: /tmp}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: tastebuds-core:ci
+
+  - it: is not rendered when the worker is disabled
+    set:
+      worker.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

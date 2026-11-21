@@ -1,0 +1,7 @@
+apiVersion: v2
+name: tastebuds-core
+description: Tastebuds core service (api and worker roles) with its database migration Job
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"
+home: https://github.com/danzakusilo/tastebuds_api

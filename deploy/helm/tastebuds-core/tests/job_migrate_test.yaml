@@ -1,0 +1,102 @@
+suite: migration job
+templates:
+  - templates/job-migrate.yaml
+values:
+  - ../ci/ci-values.yaml
+tests:
+  - it: is a pre-install and pre-upgrade hook that keeps its last run
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  - it: runs the migrate command once
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [migrate]
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+      - equal:
+          path: spec.backoffLimit
+          value: 1
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600
+
+  - it: uses only the migrator credentials
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 5
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLYWAY_USERNAME
+            valueFrom: {secretKeyRef: {name: ci-db-migrator, key: username}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLYWAY_PASSWORD
+            valueFrom: {secretKeyRef: {name: ci-db-migrator, key: password}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: TASTEBUDS_ENV, value: ci}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: DATABASE_URL, value: "jdbc:postgresql://ci-db-rw:5432/tastebuds"}
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'DATABASE_USERNAME')]"
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'DATABASE_PASSWORD')]"
+      - notExists:
+          path: "spec.template.spec.containers[0].env[?(@.name == 'REDIS_HOST')]"
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+
+  - it: waits for the database with connect retries
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SPRING_FLYWAY_CONNECT_RETRIES, value: "6"}
+
+  - it: runs with the restricted pod security profile without a service account token
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.enableServiceLinks
+          value: false
+      - notExists:
+          path: spec.template.spec.serviceAccountName
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile: {type: RuntimeDefault}
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: tmp, mountPath: /tmp}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: tastebuds-core:ci

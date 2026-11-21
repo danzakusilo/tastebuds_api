@@ -94,6 +94,14 @@ jobs:
       - run: shellcheck .claude/hooks/scope-guard.sh scripts/agentic/*.sh
       - run: scripts/agentic/scope_test.sh
 
+  k8s:
+    name: kubernetes manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/k8s/lint.sh
+
   scope:
     name: task scope
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'task/')

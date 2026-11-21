@@ -25,4 +25,7 @@ Highlights already in place:
 - Per-client rate limiting on `/v1/**`: cost-weighted token buckets in Redis, keyed by client IP (IPv6 by /64) and, for requests with a valid anonymous session token, also by session (both buckets must allow), checked before authentication; over the limit: 429 problem+json with `Retry-After`. Fails open while Redis is unavailable
 - Anonymous sessions (`POST /v1/sessions/anonymous`): HMAC-SHA256-signed bearer tokens with a fixed lifetime (30 days by default), verified without server state; invalid or expired tokens get one uniform 401 problem+json. A session opens only endpoints whose rule allows it; unlisted paths need a signed-in account. Format and key rotation: [docs/security/ANON_SESSIONS.md](docs/security/ANON_SESSIONS.md)
 - Distroless non-root container image; Trivy, CodeQL, gitleaks and Renovate in CI
+- Helm chart: every pod runs with the restricted Pod Security profile (non-root, read-only root filesystem, all
+  capabilities dropped, `RuntimeDefault` seccomp, no service-account token, no service links); only the migration Job
+  receives the schema owner's credentials, see [deploy/helm/tastebuds-core/README.md](deploy/helm/tastebuds-core/README.md)
 - Telemetry redaction of sensitive fields at the source

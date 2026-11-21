@@ -1,0 +1,6 @@
+# Trivy configuration, read from the repository root by CI and scripts/k8s/lint.sh.
+misconfiguration:
+  helm:
+    # The chart does not render with its defaults (required values are empty); scan it with the CI values.
+    values:
+      - deploy/helm/tastebuds-core/ci/ci-values.yaml
