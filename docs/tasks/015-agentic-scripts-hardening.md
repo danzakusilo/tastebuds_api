@@ -1,6 +1,6 @@
 # 015 — Harden the agentic scope scripts: fail-closed hook, safe review-log text, tested git listings
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 1 (agentic tooling hardening from the 2026-11-21 spec audit, Part E: E1–E7)
 - **Planned by:** claude-opus-5-5 on 2026-11-21
 - **Depends on:** none
@@ -453,3 +453,19 @@ the hint (`$stale_hint`); only the unexpected-error case does not, because its i
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: CHANGES_REQUESTED
+The code is correct: no under-blocking and no over-blocking found in the hook, scope.sh or task-meta.sh; all 13 acceptance criteria hold; all 21 AC10 mutants (plus 3 variants) make their named case fail; scope check with both the new and the origin/main scope.sh: all within. Over-blocking probes (full Claude Code input shape, NotebookEdit, docs/backlog/** incl. `../` and unicode, CR in active-task, CLAUDE_PROJECT_DIR unset, 20 MiB input, the first Allowed path of every existing spec) all allowed. Field names: NotebookEdit `notebook_path`, Edit/Write `file_path` VERIFIED in Claude Code 2.1.330; MultiEdit has no tool definition there.
+Findings (test gaps: a mutant removes the line and all 46 cases still pass):
+1. No test for the dangling-symlink half of step 5 (`! -L` at scope-guard.sh:41): add a dangling symlink to the "not a regular file" case; assert exit 2, message, hint.
+2. No test for `|| true` in on_exit (scope-guard.sh:25): in the unexpected-error case, also run each injected hook with stderr closed or `2>/dev/full` and assert exit 2.
+3. task-meta.sh `entry` cleanup in $TMPDIR not asserted: run the meta log calls of the append, stdin and reject cases with TMPDIR at an empty directory and assert it is empty afterwards.
+4. (minor) header comment lines over 120 columns (scope.sh:8 163, scope-guard.sh:2 and :6): reflow, same words; leave the spec-mandated strings.
+Spec gaps (do not block): rule 3: Required tests listed only "a directory" and no closed-stderr check although §1 names both (findings 1-2 close it). Rule 1: relative-path pass-through to PreToolUse hooks UNVERIFIED (a block the agent recovers from); CI runner versions UNVERIFIED (the PR job shows them). Rule 7: Edit/Write accept an optional feature-gated `tool_input._host`; the spec does not discuss it.
+Backlog suggestions: diff case with a merge-base spec > 64 KiB (pins the no-early-exit awk); decide on `_host` while a task is active; task-meta.sh:55 grep failure branch has no test.
+Parallel mode: run in worktree tastebuds_api-task-015 without the scope-guard hook (user decision).
+
+### Round 2: APPROVE
+All four round 1 findings fixed: dangling-symlink fixture (X1 now fails exactly that case), `hook_nostderr` with `2>&-` in the unexpected-error case (X2 killed), `TMPDIR=$metatmp` asserted empty in the append, stdin and reject cases (X7 killed), header lines reflowed (only spec-mandated strings and the untouched scope.sh:69 stay over 120 columns). No assertion after its case's `check` line (manual and automated pass). scope_test.sh 46 ok / 0 not ok; shellcheck v0.9.0, v0.10.0, v0.11.0 rc 0; `./gradlew check` passes; AC1, AC9, AC11 hold; scope check with the new and the origin/main scope.sh: all within. All 21 AC10 mutants and the 3 variants killed. Surviving extra mutants: X3 (equivalent: on_exit turns the set -e exit 1 into 2), X4 and X14 (recorded in docs/backlog/2026-11-21-scope-test-remaining-gaps.md). Over-blocking probes repeated on the round 2 files: no change.
+Spec gaps: nothing new (round 1 items stand).
+Backlog: created 2026-11-21-scope-test-remaining-gaps.md, 2026-11-21-scope-guard-host-field.md and 2026-11-21-scope-guard-relative-path-unverified.md (split and corrected after the reviewer's check).
