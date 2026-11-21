@@ -4,6 +4,8 @@
 #   task-meta.sh status <task-file> <STATUS>   STATUS is one of DRAFT READY IN_PROGRESS IN_REVIEW HANDOFF DONE
 #   task-meta.sh log    <task-file> <file|->   append the file (or stdin) to the end of the spec, under "## Review log"
 #
+# log rejects text with a line that starts with "## " or "- **Status:** " (exit 2, spec unchanged): scope.sh and this
+# script would read such a line as spec structure.
 # Touches only the "- **Status:**" line (status) or the end of the file (log). Never any other line.
 set -euo pipefail
 
@@ -25,8 +27,9 @@ file="$root/$rel"
 last_heading="$(grep '^## ' "$file" | tail -n 1 || true)"
 [[ "$last_heading" == "## Review log" ]] || die "'## Review log' must be the last '## ' heading"
 
+entry=""
 tmp="$(mktemp "$(dirname "$file")/.task-meta.XXXXXX")"
-trap 'rm -f "$tmp"' EXIT
+trap 'rm -f -- "$tmp" ${entry:+"$entry"}' EXIT
 
 case "$cmd" in
   status)
@@ -40,7 +43,18 @@ case "$cmd" in
     if [[ "$arg" != "-" ]]; then
       [[ -f "$arg" ]] || die "log file not found: $arg"
     fi
-    { cat "$file"; echo; cat "$arg"; } > "$tmp"
+    entry="$(mktemp)"
+    cat -- "$arg" > "$entry"
+    # The line patterns scope.sh and this script read as structure: "## " headings and the Status line.
+    # If a parser pattern changes (scope.sh patterns, the checks above), change this regex with it.
+    rc=0
+    bad="$(grep -n -m 1 -E '^(## |- \*\*Status:\*\* )' "$entry")" || rc=$?
+    case "$rc" in
+      0) die "log text line ${bad%%:*} starts with '## ' or '- **Status:** ', which would change the spec structure; indent or reword it" ;;
+      1) ;;
+      *) die "grep failed while checking the log text" ;;
+    esac
+    { cat "$file"; echo; cat "$entry"; } > "$tmp"
     ;;
   *) die "unknown command '$cmd'" ;;
 esac

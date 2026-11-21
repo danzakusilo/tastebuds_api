@@ -1,20 +1,37 @@
 #!/usr/bin/env bash
-# PreToolUse hook (Edit|Write|MultiEdit|NotebookEdit): while a task is active, file edits outside the task's
-# allowed paths are blocked (exit 2 feeds the message back to the agent). With no active task, nothing is restricted.
-# The active task is set by the run-task skill in .claude/active-task (git-ignored).
-# The active spec itself is read-only; the orchestrator updates it with scripts/agentic/task-meta.sh.
-# Fails closed: any internal error blocks the edit (exit 2), because Claude Code treats other exit codes as "allow".
+# PreToolUse hook (Edit|Write|MultiEdit|NotebookEdit): while a task is active, edits outside its allowed paths are
+# blocked (exit 2 feeds the message back to the agent). With no .claude/active-task nothing is restricted.
+# Two allow cases only:
+# A) no active task (whatever stdin holds, jq or not); B) scripts/agentic/scope.sh allowed says the path is in scope.
+# .claude/active-task (git-ignored) holds the spec path. The run-task skill writes it in preflight and deletes it at
+# handoff. After a crash, an abort or a branch switch it can be stale: only the user deletes it
+# (rm .claude/active-task). The hook never writes or deletes it. The active spec is read-only; the orchestrator
+# uses scripts/agentic/task-meta.sh.
+# jq is needed only while a task is active.
+# Fails closed: the EXIT trap turns every status other than 0 and 2 into 2, because Claude Code treats other codes as
+# "allow".
 set -euo pipefail
-trap 'echo "scope-guard: internal error (line $LINENO); blocking the edit (fail closed)" >&2; exit 2' ERR
 
-block() { echo "scope-guard: $*; blocking the edit (fail closed)" >&2; exit 2; }
+hint=""   # set once a task is active; printed under every later block message
+say_block() {
+  echo "scope-guard: $*; blocking the edit (fail closed)" >&2
+  [[ -z "$hint" ]] || echo "$hint" >&2
+}
+# A failing echo (closed stderr) must not turn a block into an allow: a failing command in an EXIT trap ends the shell
+# with its own status.
+block() { say_block "$@" || true; exit 2; }
+# shellcheck disable=SC2317,SC2329  # invoked only by the EXIT trap
+on_exit() {
+  local rc=$?
+  if (( rc != 0 && rc != 2 )); then
+    say_block "internal error (exit $rc)" || true
+    exit 2
+  fi
+}
+trap on_exit EXIT
 
-command -v jq >/dev/null 2>&1 || block "jq is not installed"
-
+# Read stdin once, before any exit, so Claude Code never writes a large input into a closed pipe.
 input="$(cat)"
-# jq 1.6 accepts empty input, so reject empty or whitespace-only stdin explicitly.
-[[ "$input" == *[![:space:]]* ]] || block "stdin is empty"
-printf '%s' "$input" | jq -e . >/dev/null 2>&1 || block "stdin is not valid JSON"
 
 root="${CLAUDE_PROJECT_DIR:-}"
 if [[ -z "$root" ]]; then
@@ -23,15 +40,28 @@ fi
 [[ -n "$root" && -d "$root" ]] || block "cannot determine the repository root"
 
 active_file="$root/.claude/active-task"
-[[ -f "$active_file" ]] || exit 0
+if [[ ! -e "$active_file" && ! -L "$active_file" ]]; then
+  exit 0
+fi
+hint="If no /run-task is in progress (it ended, crashed, or the branch changed), .claude/active-task is stale. Only the user deletes a stale file; the run-task orchestrator deletes it only at handoff. Do not delete it to get past this block: report this message (implementers: SCOPE_BLOCKED)."
+
+[[ -f "$active_file" ]] || block ".claude/active-task is not a regular file"
 task="$(tr -d '[:space:]' < "$active_file")"
-[[ -n "$task" ]] || block "$active_file is empty"
+[[ -n "$task" ]] || block ".claude/active-task is empty"
+[[ -f "$root/$task" ]] || block "active task spec not found: $task (named in .claude/active-task)"
 
-file="$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')" \
-  || block "jq failed to parse the tool input"
-[[ -n "$file" ]] || exit 0
+command -v jq >/dev/null 2>&1 || block "jq is not installed (it is required while a task is active)"
+# jq 1.6 accepts empty input, so reject empty or whitespace-only stdin explicitly.
+[[ "$input" == *[![:space:]]* ]] || block "stdin is empty"
+printf '%s' "$input" | jq -e -s 'length == 1 and (.[0] | type) == "object"' >/dev/null 2>&1 \
+  || block "stdin is not a single JSON object"
 
-[[ -f "$root/$task" ]] || block "active task spec not found: $task"
+file="$(printf '%s' "$input" | jq -r '[.tool_input.file_path, .tool_input.notebook_path] | map(select(. != null))
+  | if length == 1 and (.[0] | type) == "string" and (.[0] | startswith("/")) and (.[0] | explode | all(. >= 32))
+    then .[0] else empty end')" \
+  || block "jq failed to read the tool input"
+[[ -n "$file" ]] \
+  || block "the tool input has no usable path (exactly one of file_path or notebook_path, absolute, without control characters)"
 
 task_abs="$(realpath -m "$root/$task")"
 file_abs="$(realpath -m "$file")"
@@ -40,6 +70,7 @@ if [[ "$file_abs" == "$task_abs" ]]; then
 scope-guard: blocked edit to the active task spec '$task': it is read-only during a task.
 Status and Review log are updated by the orchestrator with scripts/agentic/task-meta.sh. If the Allowed paths are
 wrong, stop and report "SCOPE_BLOCKED: <file> — <why>" so the planner can amend the spec.
+$hint
 MSG
   exit 2
 fi
@@ -57,5 +88,6 @@ scope-guard: blocked edit to '$file': it is outside the allowed paths of $task.
 Do not work around this. If you noticed an unrelated problem, record it in docs/backlog/ (see docs/backlog/README.md)
 and continue with the task. If the task genuinely cannot be completed without this file, stop and report
 "SCOPE_BLOCKED: <file> — <why>" so the planner can amend the spec.
+$hint
 MSG
 exit 2

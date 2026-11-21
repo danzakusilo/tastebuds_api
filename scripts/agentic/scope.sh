@@ -5,7 +5,8 @@
 #   scope.sh diff    <task-file> [base]    list files changed since the merge base with base (default origin/main)
 #                                          outside the scope; exit 1 if any, exit 2 if git fails
 #
-# Allowed paths come from the task's "## Allowed paths" section, one "- `glob`" per line. In globs `*` also matches `/`,
+# `diff` reports both paths of a rename. Allowed paths come from the first "## Allowed paths" section only, one
+# "- `glob`" per line. In globs `*` also matches `/`,
 # so `services/core/src/main/kotlin/**/catalog/**` covers everything below catalog/.
 # Always allowed: docs/backlog/** (where out-of-scope findings are recorded).
 # The task spec itself is never allowed for `allowed` (it is read-only during a task; the orchestrator edits Status and
@@ -16,7 +17,8 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 
 patterns() {
-  awk '/^## Allowed paths/{f=1;next} /^## /{f=0} f && /^- `/{sub(/^- `/,""); sub(/`.*$/,""); print}'
+  # First "## Allowed paths" section only; no early exit, so `git show | patterns` never gets SIGPIPE under pipefail.
+  awk '/^## Allowed paths/{f=!seen; seen=1; next} /^## /{f=0} f && /^- `/{sub(/^- `/,""); sub(/`.*$/,""); print}'
 }
 
 is_allowed() {
@@ -46,13 +48,15 @@ case "$cmd" in
     merge_base="$(git -C "$root" merge-base "$base" HEAD)" \
       || { echo "scope: cannot determine merge base of '$base' and HEAD" >&2; exit 2; }
     # Each listing is its own assignment: in a command group only the last command's status would count.
-    committed="$(git -C "$root" diff --name-only "$merge_base" HEAD)" \
-      || { echo "scope: git failed while listing changes" >&2; exit 2; }
-    staged="$(git -C "$root" diff --name-only HEAD)" \
-      || { echo "scope: git failed while listing changes" >&2; exit 2; }
+    # --no-renames lists a rename as the deleted old path plus the added new path, so moving a file out of a
+    # protected path is reported.
+    committed="$(git -C "$root" diff --name-only --no-renames "$merge_base" HEAD)" \
+      || { echo "scope: git failed while listing committed changes" >&2; exit 2; }
+    uncommitted="$(git -C "$root" diff --name-only --no-renames HEAD)" \
+      || { echo "scope: git failed while listing uncommitted changes" >&2; exit 2; }
     untracked="$(git -C "$root" ls-files --others --exclude-standard)" \
-      || { echo "scope: git failed while listing changes" >&2; exit 2; }
-    changes="$committed"$'\n'"$staged"$'\n'"$untracked"
+      || { echo "scope: git failed while listing untracked files" >&2; exit 2; }
+    changes="$committed"$'\n'"$uncommitted"$'\n'"$untracked"
     violations=0
     while IFS= read -r changed; do
       [[ -n "$changed" ]] || continue
