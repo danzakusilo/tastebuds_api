@@ -1,0 +1,14 @@
+# Values for chart CI: helm lint, kubeconform, helm-unittest and Trivy. Names only, never secrets.
+image:
+  tag: ci
+environment: ci
+database:
+  url: jdbc:postgresql://ci-db-rw:5432/tastebuds
+  appSecret: ci-db-app
+  migratorSecret: ci-db-migrator
+redis:
+  host: ci-redis
+anonSession:
+  existingSecret: ci-anon-session
+otel:
+  endpoint: http://ci-otel:4318

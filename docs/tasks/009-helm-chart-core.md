@@ -1,6 +1,6 @@
 # 009 — Helm chart for core: api and worker Deployments, migration Job, restricted pod security, chart checks in CI
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-21
 - **Depends on:** 008
@@ -360,3 +360,14 @@ helm-unittest suites in `deploy/helm/tastebuds-core/tests/`:
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: CHANGES_REQUESTED
+Gates (run by the reviewer): scope.sh OK; `scripts/k8s/lint.sh` exit 0 (shellcheck, helm lint 0 failed, defaults fail as required, kubeconform 5/5 valid, helm-unittest 6 suites / 28 tests, Trivy 0 FAIL); `./gradlew check` BUILD SUCCESSFUL. AC1 negative checks done in a scratch repository (`{{ bogus }}` → exit 1 at helm lint; `readOnlyRootFilesystem: false` → exit 1 at helm-unittest; Trivy failure branch prints KSV-0014 and exits 1).
+1. `tests/required_values_test.yaml:2-3`: the comment gives the wrong cause ("the Job renders first because it is a hook"). Helm renders all templates in one pass in reverse lexical path order and stops at the first `required` failure; helm-unittest attributes the error only to that template. State the real rule, warn that a new template sorting after `job-migrate.yaml` that reads a required value changes the targets, and keep `worker.enabled: false` only on the `database.appSecret` and `otel.endpoint` tests.
+2. `README.md:8-12, :70`: `<release>-api` etc. are wrong when the release name does not contain `tastebuds-core` (e.g. `helm install core` → `core-tastebuds-core-api`). Keep the `<release>` notation and define it as the chart fullname (`fullnameOverride`; else the release name if it contains `tastebuds-core`; else `<release>-tastebuds-core`).
+Reviewer answers on deviations: 1 (copy to /tmp for helm-unittest) tests the same files, no .gitignore entry needed; 2 (Trivy report bind mount) works; 3 (required-values targets) is a reasonable correction of a wrong assumption in spec §8; 4 matches §5; 5 (python3 write to an allowed path) was a process slip without effect. Backlog edit matches §12.
+Orchestrator: reviewer's optional suggestion 3 (`lengthEqual` on api/worker env so AC3 "exactly the env" is enforced by tests) passed to round 2 as finding 3. Backlog: created `docs/backlog/2026-11-21-trivy-skips-helm-hook-templates.md`; fixed the stale **Location** line of `docs/backlog/2026-11-20-redis-health-contributor-all-roles.md`.
+
+### Round 2: APPROVE
+Findings: none. Round 1 findings 1-3 fixed (required-values comment states the real rule: reverse lexical path order, Helm stops at the first `required` failure; `worker.enabled: false` only on the `database.appSecret` and `otel.endpoint` tests; README defines `<release>` as the chart fullname; `lengthEqual` 10/9 on api/worker env, mutation-checked). Only `README.md` and three test suites changed since round 1; templates, values, `lint.sh`, `trivy.yaml`, `ci.yml` and `SECURITY.md` unchanged. Gates (run by the reviewer): scope.sh OK; `scripts/k8s/lint.sh` exit 0 (6 suites / 28 tests); `./gradlew check` BUILD SUCCESSFUL.
+Note (no action): Helm sorts templates by path depth first, then reverse lexical; a template in a subdirectory of `templates/` would render first.

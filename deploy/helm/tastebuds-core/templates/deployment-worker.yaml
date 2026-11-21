@@ -1,0 +1,105 @@
+{{- if .Values.worker.enabled }}
+{{- $environment := required "environment is required" .Values.environment }}
+{{- $dbUrl := required "database.url is required" .Values.database.url }}
+{{- $dbSecret := required "database.appSecret is required" .Values.database.appSecret }}
+{{- $otel := required "otel.endpoint is required" .Values.otel.endpoint }}
+{{- $ctx := dict "ctx" . "component" "worker" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tastebuds-core.fullname" . }}-worker
+  labels:
+    {{- include "tastebuds-core.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "tastebuds-core.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tastebuds-core.labels" $ctx | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "tastebuds-core.fullname" . }}
+      {{- include "tastebuds-core.podSecurityContext" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: worker
+          image: {{ include "tastebuds-core.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          env:
+            - name: TASTEBUDS_ROLE
+              value: worker
+            - name: TASTEBUDS_ENV
+              value: {{ $environment | quote }}
+            - name: DATABASE_URL
+              value: {{ $dbUrl | quote }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecret | quote }}
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecret | quote }}
+                  key: password
+            - name: DATABASE_POOL_SIZE
+              value: {{ .Values.database.poolSize | quote }}
+            - name: SPRING_FLYWAY_ENABLED
+              value: "false"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $otel | quote }}
+            - name: MANAGEMENT_HEALTH_REDIS_ENABLED
+              value: "false"
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            {{- include "tastebuds-core.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}

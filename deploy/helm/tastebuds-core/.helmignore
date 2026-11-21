@@ -1,0 +1,16 @@
+.git/
+.gitignore
+.gitattributes
+.svn/
+.hg/
+.bzr/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+.DS_Store
+.idea/
+.vscode/
+tests/
+ci/
