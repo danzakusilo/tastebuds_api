@@ -1,9 +1,23 @@
-# 012 — Parallel requests on one bucket never fail open (rate limiter contention)
+# 012 — Cap parallel calls per bucket: rate limiter contention gets 429 instead of failing open
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-21
 - **Depends on:** none
+
+> **Amended after review round 1 (2026-11-21).** Design unchanged (constants, cap, 429). Text made true where it
+> overclaimed: §5 `SECURITY.md` sentence (calls in flight still fail open when Redis answers too slowly; the
+> `WIDE_EVENT_SCHEMA.md` rows were already true and stay as they are), title, Goal, Non-goals, AC 2 heading, and the
+> second comment line of the `catch` in §3 (only retry exhaustion is never a fail open); §7 and Limits now say that
+> the fail-open bound is per key and a client controls its number of keys, and count orphaned commands (up to about
+> 32 per key per pod); "Assumptions verified" records that the retry-error burst was measured on warm code against
+> localhost Redis, and Required tests accept up to 10 bursts.
+>
+> **Amended again after review round 2 (2026-11-21).** Design unchanged. In an outage, the cap's 429 holds only while
+> Redis does not answer on an open connection; when Redis is unreachable or the connection dropped, every call fails
+> open (Goal, §5 `SECURITY.md` sentence and note, AC 7 heading, Limits test bounds). Measurement labels corrected: the
+> reviewer's ~2.5 ms per attempt and the planner's harness both ran against Redis behind Docker port mapping, not
+> plain localhost (Limits row 1, "Assumptions verified"); the multi-key runs used 1, 2, 4, 8, 16 and 32 keys (§7).
 
 ## Goal
 Close a rate-limit bypass found by the spec audit of 2026-11-21 (part B, B1; security). Bucket4j's compare-and-swap
@@ -11,9 +25,11 @@ Close a rate-limit bypass found by the spec audit of 2026-11-21 (part B, B1; sec
 `RedisRateLimiter` maps the resulting `io.github.bucket4j.TimeoutException` to `Unavailable`, and `RateLimitFilter`
 fails open. One client with enough parallel requests bypasses its own IP or session bucket (measured with a harness
 that mirrors the code on `origin/main`: 1000 parallel requests on a bucket of 120 → 35–41 allowed, 959–965 failed
-open, all passed). After this task,
-contention on one key ends in a 429 and never fails open, while a Redis outage (no connection, dropped connection, no
-answer on an open connection) still fails open (task 001: "an outage never takes the API down"). The task also takes
+open, all passed). After this task, a call beyond 16 in flight on one key, and a call that loses 32 CAS races, end
+in a 429 instead of failing open, also while Redis does not answer on an open connection (AC 7). The calls in flight
+still fail open when Redis answers too slowly (see Limits and §7). With no connection or a dropped connection, every
+call fails open, because the cap is never asked or never fills (§5; task 001: "an outage never takes the API down").
+The task also takes
 over audit finding D3: the fail-open tests name the failure that fails open, and a stall on an open connection is
 tested. Implements docs/PLAN.md §8.2 (per-client buckets) without changing a §2 decision.
 
@@ -21,8 +37,9 @@ tested. Implements docs/PLAN.md §8.2 (per-client buckets) without changing a §
 - Audit finding F1 (a request with a session waits up to 2 × `timeout`: session call, then IP call). It goes to the
   backlog; this task must not make it worse (no call waits longer than today, see Limits).
 - Redis-wide overload: many keys (many IPv6 /64s or many sessions) with thousands of parallel requests per pod can
-  still slow Redis past the deadline, and then every key fails open. This task bounds one key's share; the overload
-  case needs a per-client concurrency limit at the ingress or a later limiter task (backlog candidate, §7).
+  still slow Redis past the deadline, and then every key fails open. This task bounds one key's share; a client
+  that holds many keys multiplies that bound (§7). Both need a per-client concurrency limit at the ingress or a
+  later limiter task (backlog candidate, §7).
 - Giving tokens back to the session bucket when the IP bucket rejects or is contended
   (`docs/backlog/2026-11-21-rate-limit-no-refund-on-later-reject.md`).
 - New configuration properties for the two limits (constants for now), waiting for a slot, per-key locks, Lua-based
@@ -193,7 +210,7 @@ Change `RateLimitDecision.Rejected` (no default for `reason`):
               }
           } catch (
               // Store errors (no connection, no answer in time) fail open: rate limiting must never take the API down.
-              // Lost compare-and-swap races are the key's own parallel requests: they never fail open.
+              // Retry exhaustion (all compare-and-swap attempts lost to the key's own parallel requests) is a 429, never a fail open.
               @Suppress("TooGenericExceptionCaught") e: Exception,
           ) {
               if (isRetryExhaustion(e)) {
@@ -265,8 +282,17 @@ Fails open while Redis is unavailable
 ```
 with
 ```text
-Fails open while Redis is unavailable (unreachable, or no answer within `tastebuds.rate-limit.timeout`, 250 ms by default); parallel requests on one bucket never fail open: beyond 16 in flight on one pod, or after 32 lost compare-and-swap attempts, they get 429 with `Retry-After: 1`, also while Redis is unavailable
+Fails open while Redis is unavailable (unreachable, or no answer within `tastebuds.rate-limit.timeout`, 250 ms by default); parallel requests on one bucket beyond 16 in flight on one pod (also while Redis does not answer on an open connection), or after 32 lost compare-and-swap attempts, get 429 with `Retry-After: 1`; the calls in flight (at most 16 per bucket and pod) still fail open when Redis answers too slowly
 ```
+The parenthesis limits the cap's 429 in an outage to an open connection that gets no answer (AC 7). When Redis is
+unreachable, `proxyManager()` returns null or throws the connect error before the cap is asked (§3); after a dropped
+connection, Lettuce rejects each command in about 0 ms, so the slots almost never fill. In both cases every parallel
+call fails open, as the first clause says. The parenthesis sits next to the cap, not after `Retry-After: 1`, because
+lost compare-and-swap attempts need answers from Redis. "Too slowly" covers a stall on an open connection (AC 7) and
+both residual cases of §7: a slow environment (one CAS attempt slower than about 7.8 ms) and a Redis-wide overload.
+"Per bucket" is deliberate: a client with several buckets (sessions, IPv6 /64s) gets the bound once per bucket (§7).
+The `WIDE_EVENT_SCHEMA.md` rows above make no "never fails open" claim (`unavailable` already says "Redis unreachable
+or too slow") and stay as they are.
 Task 013 edits `SECURITY.md` line 18 and `WIDE_EVENT_SCHEMA.md` line 74; these edits touch other lines.
 
 ### 6. Test helper `StallingTcpProxy.kt` (test source set)
@@ -295,19 +321,31 @@ internal class StallingTcpProxy(
 ### 7. What a client can make it do (SPEC_CHECKLIST rule 7)
 | Fallback or new mapping | Triggers after this task | Can a client trigger it? |
 |---|---|---|
-| `Unavailable` → request passes (fail open) | No connection (`LazyConnection` connecting or in backoff); connect failure (`io.lettuce.core.RedisConnectionException`); dropped connection (`io.lettuce.core.RedisException`, Lettuce rejects commands while disconnected); no answer within the deadline (`io.github.bucket4j.TimeoutException`); any other exception except retry exhaustion | Not with one key: at most 16 operations of a key run per pod, so one key adds at most 16 outstanding commands to the connection (each synchronous call has one command outstanding); measured 5000 parallel requests on one key → 0 failed open, slowest 9 ms. Not with crafted input: the only client-derived input is the bucket key (validated IP / IPv6 prefix / signed session id, task 001 §3, 007), and the cost comes from configuration. **Residual (Non-goals):** Redis-wide overload from many keys; in a slow environment (one CAS attempt slower than ~7.8 ms, see Limits) contended calls hit the deadline first and fail open, at most 16 per key per pod at a time |
+| `Unavailable` → request passes (fail open) | No connection (`LazyConnection` connecting or in backoff); connect failure (`io.lettuce.core.RedisConnectionException`); dropped connection (`io.lettuce.core.RedisException`, Lettuce rejects commands while disconnected); no answer within the deadline (`io.github.bucket4j.TimeoutException`); any other exception except retry exhaustion | Not with one key on a healthy Redis: at most 16 operations of a key run per pod, each with one command outstanding; a command whose deadline fired stays pending up to 250 ms more (§8) while a new call uses the slot, so one key has up to about 32 commands outstanding per pod; measured 5000 parallel requests on one key → 0 failed open, slowest 9 ms. Not with crafted input: the only client-derived input is the bucket key (validated IP / IPv6 prefix / signed session id, task 001 §3, 007), and the cost comes from configuration. **Residual (Non-goals), see below:** in a slow environment (one CAS attempt slower than ~7.8 ms, including a cold JVM right after a pod starts, see Limits) contended calls hit the deadline first and fail open, at most 16 per key per pod at a time; Redis-wide overload from many keys; and the per-key bound multiplies with the number of keys a client holds |
 | New: contention → 429 | 16 operations for the same bucket key already in flight in this JVM, or 32 lost CAS attempts on the same Redis key | Only with the key's own requests: a client cannot produce another client's bucket key, and a CAS attempt is lost only to a write of the same key. Clients that already share a key (one NAT IPv4, one IPv6 /64, the shared `ip:invalid` key) share its bucket by design (task 001 §3), so one of them can already exhaust it for the others; the cap adds nothing new. Redis slowness caused by others does not reject a client: a call holds its slot for at most one deadline (250 ms), so a full cap needs more than 64 requests per second of the key on one pod (32 × the default refill rate), and 32 lost attempts need 32 commits of the key during one operation, more than 128 requests per second |
 | Side effects | Contention writes no log line; store errors keep the existing WARN of at most one per 60 s per limiter; `KeyInFlightLimit` entries live only while calls run (memory bounded by in-flight requests) | No log or memory growth a client controls |
 
+Residual fail open, in detail (accepted for this task, not closed):
+- **The bound is per key, and a client controls how many keys it has.** A client with S anonymous sessions (or
+  addresses in many IPv6 /64s) can have 16 · S calls per pod in flight, and all of them fail open when Redis answers
+  too slowly. A session call that fails open skips the IP bucket (task 007, unchanged), so the IP bucket does not
+  limit this. Sessions cost 10 IP tokens each (`POST /v1/sessions/anonymous` rule) but live 30 days, so S grows over
+  time.
+- **Redis-wide overload.** Measured by the round 1 reviewer through one limiter: 1, 2, 4, 8, 16 and 32 keys × 2000
+  parallel calls each → 0 `Unavailable`; 64 keys × 2000 (with the cap, about 1024 operations in flight) → 217 of
+  128000 `Unavailable` in 1 of 3 runs.
+
 Backlog candidates for the orchestrator (not written by this task): (1) Redis-wide overload still fails the limiter
 open — per-client in-flight limit at the ingress (Traefik, D21) or a limiter-wide bound; (2) measure the CAS attempt
-time in the cluster once task 011 runs, and lower `MAX_CAS_ATTEMPTS` if one attempt exceeds ~7 ms.
+time in the cluster once task 011 runs, also on a freshly started pod, and lower `MAX_CAS_ATTEMPTS` if one attempt
+exceeds ~7 ms. Both are in PR #12.
 
 ### 8. Lifecycle (rule 6)
 - `KeyInFlightLimit` entry: created by the first running call for a key, +1 per call, −1 when the call returns or
   throws, removed at 0. Per JVM, never shared between pods, gone on restart (nothing to clean up).
 - A Lettuce command whose Bucket4j deadline fired stays pending until Lettuce's own command timeout (250 ms after it
-  was sent) completes it; its in-flight slot was freed when the caller returned.
+  was sent) completes it; its in-flight slot was freed when the caller returned, so the next call in that slot can
+  have a command outstanding at the same time (up to about 32 commands per key per pod, §7).
 - Redis bucket keys and TTL: unchanged, so a deploy resets no bucket. During a rolling deploy, old pods still fail open
   under contention until replaced; old and new pods share buckets safely (the retry cap and the in-flight cap are
   client-side; the stored state format is unchanged). A rollback restores the bypass and needs no data change.
@@ -333,7 +371,7 @@ time in the cluster once task 011 runs, and lower `MAX_CAS_ATTEMPTS` if one atte
 | Cap 16 + `maxRetries(32)` closes it and keeps calls fast | Harness: N = 200 / 1000 / 2000 / 5000 → 0 failed open, 16–20 allowed, rest contention, slowest ≤ 12 ms (3 runs each) |
 | ≤ 16 parallel calls on one key are all allowed; two limiter instances with 16 each are all allowed | Harness: 16 parallel → 16 allowed, 30/30 runs; two instances (own connection, own cap) × 16 → 960/960 allowed over 30 runs, slowest 43 ms |
 | A flood on one key does not change other keys' decisions | Harness: 2000 parallel on one key + 50 other keys → 50/50 others allowed (3/3) |
-| Direct `ProxyManager` calls with `maxRetries(32)`, 100 parallel, capacity 120 show the retry error reliably; without `maxRetries` never | Harness: 37–40 exhaustions per run, 0 failed open, slowest ≤ 65 ms (10/10); with 50 parallel only 0–4 (not used); `origin/main` settings, 100 parallel → 0 exhaustions (3/3) |
+| Direct `ProxyManager` calls with `maxRetries(32)`, 100 parallel, capacity 120 show the retry error on warm code against a local Redis container; without `maxRetries` never | Harness (warm JVM, Redis container with its port published on 127.0.0.1): 37–40 exhaustions per run, 0 failed open, slowest ≤ 65 ms (10/10); with 50 parallel only 0–4 (not used); `origin/main` settings, 100 parallel → 0 exhaustions (3/3). **Corrected after round 1:** in the Gradle test (cold JVM, Redis behind Testcontainers' Docker port mapping) one burst sometimes gave no retry error, so the test runs up to 10 bursts on fresh bucket keys (implementer's deviation, accepted by the reviewer). The reviewer measured warm attempts at about 2.5 ms or less on this machine, with Redis behind Testcontainers' Docker port mapping. Both setups reach Redis through Docker port mapping; on `origin/main` code 10 bursts gave no retry error |
 | Failure classes by phase | Harness: closed port → `RedisConnectionException` (cause `AnnotatedConnectException`) in 1–295 ms; accepting socket that never answers → `RedisConnectionException` (cause `RedisCommandTimeoutException`) in ~300 ms; dropped connection (proxy closed, 100 ms wait) → `io.lettuce.core.RedisException` in 0 ms (3/3); stall on an open connection (proxy stops forwarding) → `io.github.bucket4j.TimeoutException` in 249–253 ms (30/30) |
 | With Redis stalled, 16 in-flight calls hold the cap and the 17th returns at once | Harness: 17th → contention in 0 ms; the 16 → `TimeoutException`; another key → `TimeoutException` at 252 ms |
 | `getClientSideConfig()` is protected, so tests cannot read `maxRetries` directly (hence the behaviour test) | `javap` of `AbstractProxyManager` |
@@ -343,20 +381,20 @@ time in the cluster once task 011 runs, and lower `MAX_CAS_ATTEMPTS` if one atte
 | AC 8's grep prints exactly the `LazyConnection.kt:24` line on the current tree | Ran it on `plan/audit-fixes` (= `origin/main` for these files) |
 | The Allowed paths parse as intended | `scripts/agentic/scope.sh allowed` on this spec: exit 0 for every listed file and `docs/backlog/x.md`; exit 1 for `RedisRateLimiterTest.kt`, `RateLimitConfiguration.kt`, `application.yaml` and the spec itself |
 | Only `RedisRateLimiterTest` (not in Allowed paths) uses the decision types outside the listed files, and it compiles unchanged with `remaining: Long?` | `grep` for `RateLimitDecision.` / `.remaining` in `services/core/src`; compile check above |
-| UNVERIFIED: in the cluster one CAS attempt (GET + EVAL round trip) takes < ~7.8 ms, so 32 attempts end before the 250 ms deadline | Cannot run before tasks 010/011; recorded under Limits and as backlog candidate (2) |
+| UNVERIFIED: in the cluster one CAS attempt (GET + EVAL round trip) takes < ~7.8 ms, so 32 attempts end before the 250 ms deadline, also on a cold JVM right after a pod starts | Cannot run before tasks 010/011; recorded under Limits and as backlog candidate (2). The cold-JVM misses of the retry-error test (row above) show that a cold JVM is slower than the warm numbers |
 | UNVERIFIED: the Kotlin `RedisRateLimiterContentionTest` fails on `origin/main` | Shown with the Java mirror only; the implementer checks first (AC 1) |
 
 ## Limits
 | Limit | Value | Wrapped by (must be larger) |
 |---|---|---|
-| CAS attempts per bucket operation (`MAX_CAS_ATTEMPTS`, Bucket4j `maxRetries`) | 32 attempts | The Bucket4j deadline (250 ms): 32 attempts must end before it, i.e. one attempt < ~7.8 ms. Localhost: 100 callers without the cap end in ≤ 65 ms. Cluster: UNVERIFIED. If attempts are slower, the deadline fires first and the call fails open (bounded by the next row) |
-| In-flight operations per bucket key per JVM (`MAX_IN_FLIGHT_PER_KEY`) | 16 | 32 attempts: 16 callers need ≤ 16 attempts; 32 covers the callers of two pods (measured 960/960 allowed). In a slow environment it also bounds one key's fail-open calls to 16 per pod at a time (≤ 64 per second at 250 ms each) |
+| CAS attempts per bucket operation (`MAX_CAS_ATTEMPTS`, Bucket4j `maxRetries`) | 32 attempts | The Bucket4j deadline (250 ms): 32 attempts must end before it, i.e. one attempt < ~7.8 ms. Warm JVM, Redis in a local Docker container behind its port mapping: 100 callers without the cap end in ≤ 65 ms (planner harness, port published on 127.0.0.1); one attempt ≤ ~2.5 ms (reviewer, Testcontainers). A cold JVM is slower (round 1: the retry-error burst sometimes missed). Cluster and freshly started pods: UNVERIFIED. If attempts are slower, the deadline fires first and the call fails open (bounded by the next row) |
+| In-flight operations per bucket key per JVM (`MAX_IN_FLIGHT_PER_KEY`) | 16 | 32 attempts: 16 callers need ≤ 16 attempts; 32 covers the callers of two pods (measured 960/960 allowed). In a slow environment it also bounds the fail-open calls of **one key** to 16 per pod at a time (≤ 64 per second at 250 ms each). The bound is per key and a client controls its number of keys: with S sessions (or many /64s) it is 16 · S per pod, and a session call that fails open skips the IP bucket (task 007), so the IP bucket does not cap it (§7). One key has up to about 32 commands outstanding per pod (16 running plus orphans of fired deadlines, §8) |
 | Waiting for an in-flight slot | none (a full key returns contention at once) | Keeps one limiter call ≤ one deadline, as today |
 | Bucket4j deadline per operation (`tastebuds.rate-limit.timeout`) | 250 ms default, ≤ 5 s (unchanged) | One request: session call + IP call ≤ 2 × `timeout` (F1, unchanged, backlog) — inside client and ingress timeouts; the ingress is not deployed yet and its task must set them above 2 × `timeout`. When the deadline fires, the caller returns and frees its slot; the command it sent stays pending in Lettuce until Lettuce's own command timeout (same 250 ms, counted from sending) completes it, so the two are not nested: the Bucket4j deadline is the one that stops the caller (measured: it fires first, 249–253 ms) |
 | `Retry-After` for contention | 1 s | — |
 | WARN for store errors | ≤ 1 per 60 s per limiter (unchanged); contention never logs | — |
 | Lettuce connect timeout, reconnect backoff | 250 ms, 5 s (unchanged) | — |
-| Test bounds | N = 1000; every thread join ≤ 30 s; connect failures < 2 s; stall: ≥ 200 ms and < 2 s; dropped connection: wait 200 ms after `close()`, then < 1 s; outage probe: 100 ms after the 16 callers started, answer < 100 ms | The 16 stalled callers hold their slots for ~250 ms, longer than probe start + probe (≤ 200 ms) |
+| Test bounds | N = 1000; every thread join ≤ 30 s; connect failures < 2 s; stall: ≥ 200 ms and < 2 s; dropped connection: wait 200 ms after `close()`, then < 1 s; stall probe: 100 ms after the 16 callers started, answer < 100 ms | The 16 stalled callers hold their slots for ~250 ms, longer than probe start + probe (≤ 200 ms) |
 
 ## Acceptance criteria
 1. **Reproduced first.** `RedisRateLimiterContentionTest` uses only symbols that exist on `origin/main` (no
@@ -364,9 +402,9 @@ time in the cluster once task 011 runs, and lower `MAX_CAS_ATTEMPTS` if one atte
    implementer runs it on unchanged main code: both "never more than the bucket holds" tests and the compare-and-swap
    test fail. The handoff notes quote the failure lines (decision tally with `Unavailable` > 0; no retry error). The
    reviewer may copy the file into a worktree of `origin/main` and see the same.
-2. **Contention never fails open.** N = 1000 parallel `tryConsume` calls on one key give no `Unavailable`, between 1 and
-   120 `Allowed`, and otherwise only `Rejected` — for an IP key and for a session key (default capacities 120,
-   timeout 250 ms).
+2. **1000 parallel calls on one key do not fail open.** N = 1000 parallel `tryConsume` calls on one key give no
+   `Unavailable`, between 1 and 120 `Allowed`, and otherwise only `Rejected` — for an IP key and for a session key
+   (default capacities 120, timeout 250 ms).
 3. **Contention is a 429.** In-flight cap reached → `Rejected(null, 1, CONTENTION)` without a Redis call; Bucket4j retry
    exhaustion → the same decision. `RateLimitFilter` answers with the task 001 429 problem body, `Retry-After: 1`, wide
    event `rate_limit.outcome=rejected`, `rate_limit.reject_reason=contention`, `rate_limit.limited_by` = `session` or
@@ -380,8 +418,8 @@ time in the cluster once task 011 runs, and lower `MAX_CAS_ATTEMPTS` if one atte
    `Unavailable` in < 1 s, WARN names `io.lettuce.core.RedisException`; stall on an open connection → `Unavailable`
    after ≥ 200 ms and < 2 s, WARN names `io.github.bucket4j.TimeoutException`. A `TimeoutException` and a
    `BucketExecutionException` with a cause, thrown by the store, give `Unavailable`.
-7. **The cap holds in an outage.** With Redis stalled and 16 calls on a key in flight, the 17th call on that key returns
-   contention in < 100 ms; the 16 return `Unavailable`.
+7. **The cap holds while Redis stalls.** With Redis stalled and 16 calls on a key in flight, the 17th call on that key
+   returns contention in < 100 ms; the 16 return `Unavailable`.
 8. **No latency added.** No code path waits for a slot; contention returns without a Redis call or before the
    deadline. Check: `grep -rn -E 'Thread\.sleep|tryLock\(|\.await\(|\.acquire\(|\.lock\(\)|synchronized'
    services/core/src/main/kotlin/dev/danya/tastebuds/core/platform/ratelimit/` prints exactly one line, the existing
@@ -410,9 +448,13 @@ time in the cluster once task 011 runs, and lower `MAX_CAS_ATTEMPTS` if one atte
   - `a flood on one key leaves other keys alone`: 1000 calls on one key and one call on each of 50 other unique keys,
     all released by the same latch; the 50 are `Allowed(119)`.
   - `compare-and-swap gives up after 32 lost attempts with Bucket4j's retry error`: `RateLimitRedis.proxyManager(client,
-    250 ms)` called directly (no limiter, no cap) from 100 threads on one key with a 120-token greedy bucket; at least
-    one thrown exception has exact class `BucketExceptions.BucketExecutionException`, no cause, and message
-    `CAS operation failed after 32 retry attempts`.
+    250 ms)` called directly (no limiter, no cap) from 100 threads on one key with a 120-token greedy bucket, after
+    one warm-up call on another key. A burst whose threads raise no retry error is repeated on a fresh bucket key, at
+    most 10 bursts in total (a cold JVM behind Docker port mapping can be too slow for 32 attempts in one burst;
+    amended after round 1). Pass: some burst has at least one thrown exception with exact class
+    `BucketExceptions.BucketExecutionException` and no cause, and every such exception has the message
+    `CAS operation failed after 32 retry attempts`. The failure message lists the outcome tally of each burst. On
+    `origin/main` code no burst can pass (no `maxRetries`).
 - `RedisRateLimiterFailOpenTest` (extend; each test builds its own limiter, so its first failure logs; helper
   `warnedClasses(output)` = every match of `Rate limiting unavailable, failing open: ([\w.$]+)` in `output.all`; proxy
   tests point the limiter at `127.0.0.1:proxy.port` with the shared Redis as upstream, make one `Allowed` call before
@@ -470,3 +512,26 @@ time in the cluster once task 011 runs, and lower `MAX_CAS_ATTEMPTS` if one atte
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: CHANGES_REQUESTED
+The bypass is closed for one key in the real code: without the in-flight cap 980-989 of 1000 parallel calls failed open, with it 0 in every run. AC 1 reproduced on origin/main code (IP {Allowed=15, Unavailable=985}, session {Unavailable=977, Allowed=23}, no retry error in 10 bursts). AC 2-12 met except finding 1. `./gradlew check` green (182 tests); ratelimit tests 83/83 in two reruns; Kover platform.ratelimit 96.5%. Mutations: removing the cap, removing maxRetries, widening the exception match (subclass, message, no cause check), no release on a throw, off by one, entries kept at 0 all fail named tests; a message-prefix match survives (equivalent in practice). KeyInFlightLimit entries are bounded by requests in flight, not by the key space. Deviation 1 (up to 10 bursts) accepted: still needs the exact class, no cause and the message, and cannot pass without maxRetries; the misses come from a cold JVM (warm attempts about 2.5 ms here).
+Findings:
+1. The "no log line" rule of AC 3 is tested only for retry exhaustion, not for the in-flight cap path (RedisRateLimiter.kt:90), which handles almost all contention: a `log.warn` or a `warnThrottled` call there passes all 83 tests. Fix: in `while Redis stalls, a seventeenth parallel call on one key is rejected at once`, capture output; right after the 17th call assert no line from the RedisRateLimiter logger; after the 16 callers return assert `warnedClasses(output) == listOf("io.github.bucket4j.TimeoutException")`; show both mutations now fail.
+Spec gaps (do not block): (1) rules 6/7: the SECURITY.md text of §5 says parallel requests on one bucket "never fail open", but Limits and §7 list exceptions (slow environment: up to 16 per key per pod; Redis-wide overload: 217 of 128000 Unavailable with 64 keys x 2000 in 1 of 3 runs). (2) rule 7: the residual bound is per key and a client controls its key count (16 x S sessions per pod; a session call that fails open skips the IP bucket); §7 and Limits row 2 do not say this. (3) rule 4: §7 "at most 16 outstanding commands" leaves out orphaned commands (up to about 32). (4) rule 1: "Assumptions verified" was measured on warm code against localhost Redis; a cold JVM behind port mapping misses the retry error.
+Backlog suggestions: measure on a freshly started pod too, and add the multi-key data point (orchestrator: both backlog items are in PR #12); a test for IllegalStateException with the retry message → Unavailable; close the RedisClients in RedisRateLimiterContentionTest and RedisRateLimiterTest; StallingTcpProxy robustness if reused.
+Orchestrator: finding 1 → implementer round 2; spec gaps 1-4 → planner amendment (SECURITY.md text, Limits, §7, Assumptions), applied by the implementer in the same round.
+Parallel mode: run in worktree tastebuds_api-task-012 without the scope-guard hook (user decision).
+
+### Round 2: CHANGES_REQUESTED
+Spec amended by the planner after round 1 (title, Goal, AC 2 heading, §3 comment, §5 SECURITY.md text, §7 residual fail open 16·S per pod and orphans up to about 32, Limits, Assumptions, Required tests with warm-up and up to 10 bursts); the implementer added the cap-path log assertions and applied the text edits. Mutation B (warnThrottled on the cap path) fails in both log formats. Unmutated: ratelimit tests 83/83 twice; `./gradlew :services:core:test --rerun check` 182/0; Kover platform.ratelimit 96.5%; scope exit 0; AC 11 byte for byte.
+Findings:
+1. The "no log line" assertion (RedisRateLimiterFailOpenTest.kt:139, marker at :201) matches only the plain log format. In normal order (class 17 of 32, after 6 Spring integration tests) the test logs JSON, so mutation A (log.warn on every cap rejection) passes the full `:services:core:test` (182/0) and `--tests '*ratelimit*'` (83/0) with earlier test results deleted. The implementer saw it fail only because Gradle runs a previously failed class first (plain format). Fix: a format-independent check, e.g. `Regex("""dev\.danya\.tastebuds\.core\.platform\.ratelimit\.RedisRateLimiter\b""")` on output.all (tested by the reviewer: fails mutation A with JSON logs, passes unmutated code), or a logback ListAppender; delete services/core/build/test-results before each mutation run; show mutation A fails with `--tests '*ratelimit*'` and in the full test run; optional: join the 16 callers in a finally so a failed assertion does not leak WARN lines into the next test.
+Spec gaps (best fixed in this round, the text is public): (1) rules 6/7: SECURITY.md "also while Redis is unavailable" is true only for a stall on an open connection; when Redis is unreachable the cap is never asked, and a dropped connection rejects commands in about 0 ms, so all parallel calls fail open. Suggested: "also while Redis does not answer on an open connection"; the AC 7 heading should say "while Redis stalls". (2) Limits row 1: the reviewer's ≤ ~2.5 ms came from Redis behind Docker port mapping, not localhost; the multi-key runs were 1, 2, 4, 8, 16, 32 keys.
+Backlog: ratelimit-tests-leave-redis-clients-open.md: the event-loop threads belong to the shared ClientResources (shut down in @AfterAll); the open clients keep connections, not threads (orchestrator fixes).
+Orchestrator: round 3 (last): finding 1 → implementer; spec gaps 1-2 → planner amendment, applied by the implementer in the same round.
+
+### Round 3: APPROVE
+Spec amended again by the planner after round 2 (SECURITY.md parenthesis next to the cap: "also while Redis does not answer on an open connection"; §5 note; Goal; AC 7 "The cap holds while Redis stalls"; "stall probe"; both measurements through Docker port mapping; keys 1, 2, 4, 8, 16, 32). The implementer made the cap-path log check format-independent (regex `RedisRateLimiter\b`), joined the 16 callers in a finally, and applied the SECURITY.md edit. Reviewer, fresh scratch copy without a build directory: mutation A (log.warn on the cap path) fails the full `:services:core:test` with JSON logs (class 17 of 32; 182/1, only the target test); mutation B fails `--tests '*ratelimit*'` with JSON logs (83/1). Unmutated: ratelimit tests 83/83 twice (JSON logs, the hard case); `./gradlew :services:core:test --rerun check` 182/0; Kover platform.ratelimit 96.5%; scope exit 0; AC 8 grep unchanged; AC 11 byte for byte. Grep for overclaims in the spec, SECURITY.md, WIDE_EVENT_SCHEMA.md, the backlog files and the sources: none left.
+Nits (not fixed, no effect on the design or the user-facing docs): the Goal says the cap "never fills" with a dropped connection, the §5 note "almost never"; the round 1 amendment banner still says "against localhost Redis" (corrected by the round 2 banner; kept as history).
+Spec gaps: none open. Backlog: created 2026-11-21-ratelimit-tests-leave-redis-clients-open.md (corrected in round 2), 2026-11-21-stalling-tcp-proxy-robustness.md, 2026-11-21-retry-exhaustion-match-by-message-test.md; the multi-key data and the fresh-pod measurement went into the two rate-limiter items of PR #12.
+Lesson for mutation checks (orchestrator): delete build/test-results first; Gradle runs a previously failed class first, which changes the log format (plain before any Spring context, JSON after).

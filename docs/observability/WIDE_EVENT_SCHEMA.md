@@ -55,12 +55,13 @@ Never the token, the session id or a key id.
 ### Rate limiting (`/v1/**` only)
 | Field | Type | Description |
 |---|---|---|
-| `rate_limit.outcome` | string | `allowed`, `rejected` (429) or `unavailable` (Redis unreachable or too slow; the request went through) |
+| `rate_limit.outcome` | string | `allowed`, `rejected` (429; `rate_limit.reject_reason` says why) or `unavailable` (Redis unreachable or too slow; the request went through) |
 | `rate_limit.cost` | long | Tokens this request costs |
-| `rate_limit.remaining` | long | Tokens left after this request in the bucket that decided: the smaller of the session and IP buckets when allowed, the rejecting bucket when rejected; absent when `unavailable` |
+| `rate_limit.remaining` | long | Tokens left after this request in the bucket that decided: the smaller of the session and IP buckets when allowed, the rejecting bucket when rejected; absent when `unavailable` or when `reject_reason` is `contention` |
 | `rate_limit.rule` | string | Matching rule (`GET /v1/meta`, `* /v1/...`) or `default`. Needed because `http.route` is `UNMATCHED` on a 429 |
 | `rate_limit.key_type` | string | `ip4`, `ip6` (the key is the /64) or `invalid` (unparsable address, one shared bucket) |
 | `rate_limit.limited_by` | string | Only when `rejected`: `session` (the anonymous session's bucket) or `ip` (the client address bucket) |
+| `rate_limit.reject_reason` | string | Only when `rejected`: `tokens` (the bucket had fewer tokens than the cost) or `contention` (too many parallel requests on one bucket: 16 already in flight on this pod, or 32 lost compare-and-swap attempts; `Retry-After: 1`, the contended bucket was not charged) |
 
 Never the client address, the session id or the bucket key (personal data).
 

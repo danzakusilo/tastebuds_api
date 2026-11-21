@@ -72,7 +72,7 @@ class RateLimitFilterTest {
 
     @Test
     fun `rejected requests get a 429 problem with Retry-After and stop`() {
-        val run = run(RateLimitDecision.Rejected(1, 42))
+        val run = run(RateLimitDecision.Rejected(1, 42, RejectReason.TOKENS))
         assertNull(run.chain.request)
         assertEquals(429, run.response.status)
         assertEquals("42", run.response.getHeader("Retry-After"))
@@ -89,6 +89,7 @@ class RateLimitFilterTest {
         assertEquals("Rate limit exceeded.", json.path("detail").asString())
         assertEquals("/v1/meta", json.path("instance").asString())
         assertEquals("rejected", run.event["rate_limit.outcome"])
+        assertEquals("tokens", run.event["rate_limit.reject_reason"])
         assertFalse(body.contains(clientAddress))
         assertFalse(
             run.event
@@ -96,6 +97,43 @@ class RateLimitFilterTest {
                 .values
                 .any { it.toString().contains(clientAddress) },
         )
+    }
+
+    private val contended = RateLimitDecision.Rejected(null, 1, RejectReason.CONTENTION)
+
+    @Test
+    fun `contention on the IP bucket gets a 429 with Retry-After 1 and no remaining`() {
+        val run = run(contended)
+        assertNull(run.chain.request)
+        assertEquals(429, run.response.status)
+        assertEquals("1", run.response.getHeader("Retry-After"))
+        assertTrue(
+            run.response.contentType
+                .orEmpty()
+                .startsWith("application/problem+json"),
+        )
+        val json = JsonMapper.builder().build().readTree(run.response.contentAsString)
+        assertEquals("about:blank", json.path("type").asString())
+        assertEquals("Too Many Requests", json.path("title").asString())
+        assertEquals(429, json.path("status").asInt())
+        assertEquals("Rate limit exceeded.", json.path("detail").asString())
+        assertEquals("/v1/meta", json.path("instance").asString())
+        assertEquals("rejected", run.event["rate_limit.outcome"])
+        assertEquals("contention", run.event["rate_limit.reject_reason"])
+        assertEquals("ip", run.event["rate_limit.limited_by"])
+        assertNull(run.event["rate_limit.remaining"])
+    }
+
+    @Test
+    fun `contention on the session bucket gets a 429 without asking the IP bucket`() {
+        val run = run(RateLimitDecision.Allowed(9), sessionDecision = contended)
+        assertNull(run.chain.request)
+        assertEquals(429, run.response.status)
+        assertEquals("1", run.response.getHeader("Retry-After"))
+        assertEquals("session", run.event["rate_limit.limited_by"])
+        assertEquals("contention", run.event["rate_limit.reject_reason"])
+        assertNull(run.event["rate_limit.remaining"])
+        assertEquals(listOf(ClientKeyType.SESSION), run.limiter.keys.map { it.type })
     }
 
     @Test
@@ -115,18 +153,19 @@ class RateLimitFilterTest {
 
     @Test
     fun `a session over its limit is rejected without charging the IP bucket`() {
-        val run = run(RateLimitDecision.Allowed(9), sessionDecision = RateLimitDecision.Rejected(0, 7))
+        val run = run(RateLimitDecision.Allowed(9), sessionDecision = RateLimitDecision.Rejected(0, 7, RejectReason.TOKENS))
         assertEquals(429, run.response.status)
         assertEquals("7", run.response.getHeader("Retry-After"))
         assertEquals("session", run.event["rate_limit.limited_by"])
         assertEquals("rejected", run.event["rate_limit.outcome"])
+        assertEquals("tokens", run.event["rate_limit.reject_reason"])
         assertEquals(listOf(ClientKeyType.SESSION), run.limiter.keys.map { it.type })
         assertNull(run.chain.request)
     }
 
     @Test
     fun `the IP bucket still limits requests with a session`() {
-        val run = run(RateLimitDecision.Rejected(0, 3), sessionDecision = RateLimitDecision.Allowed(5))
+        val run = run(RateLimitDecision.Rejected(0, 3, RejectReason.TOKENS), sessionDecision = RateLimitDecision.Allowed(5))
         assertEquals(429, run.response.status)
         assertEquals("3", run.response.getHeader("Retry-After"))
         assertEquals("ip", run.event["rate_limit.limited_by"])
@@ -156,7 +195,7 @@ class RateLimitFilterTest {
     @Test
     fun `paths outside v1 are never limited`() {
         listOf("/actuator/health/liveness", "/error", "/").forEach { path ->
-            val run = run(RateLimitDecision.Rejected(0, 1), path)
+            val run = run(RateLimitDecision.Rejected(0, 1, RejectReason.TOKENS), path)
             assertEquals(0, run.limiter.calls, path)
             assertNotNull(run.chain.request, path)
             assertTrue(

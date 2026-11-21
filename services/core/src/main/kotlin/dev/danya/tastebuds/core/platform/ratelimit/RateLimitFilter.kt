@@ -65,11 +65,12 @@ internal class RateLimitFilter(
         key: ClientKey,
         decision: RateLimitDecision.Rejected,
     ) {
-        WideEvent
-            .current()
+        val event = WideEvent.current()
+        event
             ?.put("rate_limit.outcome", RateLimitOutcome.REJECTED)
-            ?.put("rate_limit.remaining", decision.remaining)
             ?.put("rate_limit.limited_by", if (key.type == ClientKeyType.SESSION) "session" else "ip")
+            ?.put("rate_limit.reject_reason", decision.reason)
+        decision.remaining?.let { event?.put("rate_limit.remaining", it) }
         response.setHeader(HttpHeaders.RETRY_AFTER, decision.retryAfterSeconds.toString())
         ProblemResponses.write(request, response, HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests", "Rate limit exceeded.")
     }
