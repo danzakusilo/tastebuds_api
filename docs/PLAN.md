@@ -308,9 +308,10 @@ Each phase ends with a demoable, observable, secured increment. Exit criteria ar
 ### Phase 1: Platform baseline and anonymous access
 - k3d cluster + Helm chart for core (`api`/`worker` deployments, probes, resources, security context), CloudNativePG,
   Redis; `make`/script for one-command local cluster. CI renders and lints the chart (`helm lint`, kubeconform).
-- DB roles (`app_rw`, `migrator`) with Flyway as a separate Job; jOOQ codegen pipeline.
-- Anonymous sessions (signed tokens, 30-day TTL; task 006) + rate limiting (task 001 done, Bucket4j/Redis,
-  cost-weighted; a bucket per anon session in task 007). Per-session LLM budgets (§5.6) arrive with their first
+  Planned: chart (task 009), local k3d platform (task 010), deploy + exit-criterion smoke test (task 011).
+- DB roles (`app_rw`, `migrator`) with Flyway as a separate Job (task 008); jOOQ codegen pipeline.
+- ✅ Anonymous sessions (signed tokens, 30-day TTL; task 006 done) + rate limiting (task 001 done, Bucket4j/Redis,
+  cost-weighted; a bucket per anon session, task 007 done). Per-session LLM budgets (§5.6) arrive with their first
   consumer, the Phase 3 extraction worker and cost meter; until then the rate limiter bounds abuse.
 - Kafka (Strimzi on k3d) + Spring Modulith event externalization (D12).
 - Threat model v1, BOLA test harness, ZAP baseline in CI.

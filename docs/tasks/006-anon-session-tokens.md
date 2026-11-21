@@ -1,6 +1,6 @@
 # 006 — Anonymous sessions: signed bearer tokens, `POST /v1/sessions/anonymous`, authentication
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-20
 - **Depends on:** 001 (DONE)
