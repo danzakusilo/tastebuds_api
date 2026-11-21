@@ -32,6 +32,7 @@ strong one, with scope enforced by tooling rather than by trust. A human sees on
 |---|---|
 | `docs/tasks/NNN-*.md` | Task spec: goal, non-goals, **allowed paths**, design notes, acceptance criteria, required tests, gates, review log |
 | `docs/backlog/*.md` | Out-of-scope findings. Never fixed in place |
+| `docs/agentic/SPEC_CHECKLIST.md` | Rules the planner applies before READY and the reviewer checks: each one from a spec gap that reached a PR |
 | `.claude/agents/{planner,implementer,reviewer,explainer}.md` | Agent roles, models, tool limits |
 | `.claude/skills/{plan-task,run-task,brief-pr}/SKILL.md` | Orchestration entry points (`/plan-task`, `/run-task`, `/brief-pr`) |
 | `build/pr-brief/pr-N.md` | (git-ignored) Review brief of PR N from `/brief-pr`: over-engineering check, main ideas traced across files |

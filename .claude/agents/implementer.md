@@ -23,13 +23,16 @@ findings). Your job is to make the acceptance criteria true, nothing more.
 
 ## Process
 1. Read the spec, CLAUDE.md, and the code around the allowed paths.
-2. Implement in small steps; run `./gradlew ktlintFormat` and then `./gradlew check` until green.
-3. Run `scripts/agentic/scope.sh diff <spec>` and confirm no violations.
+2. Check every `UNVERIFIED` claim under "Assumptions verified" before you build on it. If one is wrong and the fix
+   needs a design decision, report `SPEC_PROBLEM`; if the spec allows the fix, apply it and list it as a deviation.
+3. Implement in small steps; run `./gradlew ktlintFormat` and then `./gradlew check` until green.
+4. Run `scripts/agentic/scope.sh diff <spec>` and confirm no violations.
 
 ## Output
 Return a short report:
 - Files changed (one line each, with purpose)
 - Acceptance criteria: each number → how it is satisfied (test name)
 - `./gradlew check` result and the coverage line for the changed module
+- Deviations from the spec, including assumptions that turned out wrong, each with the reason
 - Backlog entries created, if any
 - Anything you could not do, prefixed `SPEC_PROBLEM:` or `SCOPE_BLOCKED:`

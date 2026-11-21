@@ -22,8 +22,12 @@ A feature request, a backlog file from `docs/backlog/`, or a phase item from `do
    the change needs (tests included), nothing broader. Over-broad globs defeat the scope guard.
 5. Acceptance criteria must be objectively checkable. Required tests must name classes and behaviours.
    Security-relevant behaviour (authz, input limits, abuse) always gets an explicit negative test.
-6. Add the task to the table in `docs/tasks/README.md` with status READY.
+6. Go through `docs/agentic/SPEC_CHECKLIST.md` rule by rule against the draft. Run every tool behaviour the design
+   relies on (Docker is available: use pinned images, never install tools on the host; scratch files go in a
+   `mktemp -d` directory outside the repo). Fill "Assumptions verified" and "Limits". Close each gap you find in the
+   design notes, acceptance criteria or required tests, not with a vague note.
+7. Add the task to the table in `docs/tasks/README.md` with status READY.
 
 ## Output
-Return: the spec path, a 3-line summary, and any open questions. Only write under `docs/tasks/` (and triage notes in
-`docs/backlog/`).
+Return: the spec path, a 3-line summary, any open questions, and the checklist rules that did not apply (one line).
+Only write under `docs/tasks/` (and triage notes in `docs/backlog/`).
