@@ -8,7 +8,6 @@ import org.springframework.context.annotation.Import
 import org.springframework.dao.DataAccessException
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.context.ActiveProfiles
-import org.testcontainers.postgresql.PostgreSQLContainer
 import javax.sql.DataSource
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -22,7 +21,6 @@ class DatabaseIntegrationTest(
     @Autowired private val jdbc: JdbcClient,
     @Autowired private val dataSource: DataSource,
     @Autowired private val flyway: Flyway,
-    @Autowired private val postgres: PostgreSQLContainer,
 ) {
     @Test
     fun `pgvector type and distance operator resolve through the app search path`() {
@@ -68,6 +66,35 @@ class DatabaseIntegrationTest(
         assertNotSame(dataSource, flywayDataSource)
         assertEquals("0", flywayJdbc.sql("show statement_timeout").query(String::class.java).single())
         assertEquals("5s", jdbc.sql("show statement_timeout").query(String::class.java).single())
-        assertEquals(postgres.username, flywayJdbc.sql("select current_user").query(String::class.java).single())
+        assertEquals(
+            TestcontainersConfiguration.MIGRATOR_DB_USER,
+            flywayJdbc.sql("select current_user").query(String::class.java).single(),
+        )
+    }
+
+    @Test
+    fun `migrations run as the non-superuser owner of the core schema`() {
+        val flywayJdbc = JdbcClient.create(flyway.configuration.dataSource)
+
+        val superuser =
+            flywayJdbc
+                .sql("select rolsuper from pg_roles where rolname = current_user")
+                .query(Boolean::class.javaObjectType)
+                .single()
+        val owner =
+            flywayJdbc
+                .sql("select pg_get_userbyid(nspowner) from pg_namespace where nspname = 'core'")
+                .query(String::class.java)
+                .single()
+
+        assertFalse(superuser)
+        assertEquals(TestcontainersConfiguration.MIGRATOR_DB_USER, owner)
+    }
+
+    @Test
+    fun `the app role cannot read the migration history`() {
+        assertFailsWith<DataAccessException> {
+            jdbc.sql("select count(*) from core.flyway_schema_history").query(Long::class.javaObjectType).single()
+        }
     }
 }

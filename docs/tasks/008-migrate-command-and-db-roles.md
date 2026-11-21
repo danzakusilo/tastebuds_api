@@ -1,6 +1,6 @@
 # 008 — Run migrations as a separate `migrate` command with the non-superuser schema owner
 
-- **Status:** READY
+- **Status:** HANDOFF
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-21
 - **Depends on:** none
@@ -263,3 +263,11 @@ DDL, no access to the migration history); migrations run as the non-superuser sc
 
 ## Review log
 <!-- Appended by the run-task orchestrator. One entry per round: verdict + numbered findings + resolution. -->
+
+### Round 1: APPROVE
+Findings: none. All nine acceptance criteria verified; `./gradlew check --rerun-tasks` passed (40 tasks executed);
+Kover: `MigrationCommand` 27/28 lines (missed: the default `Slf4jWideEventSink()` argument), `MigrationContext` 2/2;
+scope diff against `main` clean; V1 and V2 unchanged.
+Backlog suggestions filed: 2026-11-21-migrate-test-asserts-file-name.md, 2026-11-21-migrate-console-sink-untested.md,
+2026-11-21-migrate-failure-event-flyway-field.md, 2026-11-21-migrate-error-event-no-outcome.md,
+2026-11-21-claude-md-layout-docs-deploy.md.
