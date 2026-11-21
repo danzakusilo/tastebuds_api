@@ -72,6 +72,7 @@ Never the client address, the session id or the bucket key (personal data).
 | `flyway.schema_version` | string | Schema version after the run, e.g. `2`; absent when the run failed or no migration was ever applied |
 
 The `migrate` command writes its event to the console only (no OTLP export); read it with `kubectl logs job/<release>-migrate`.
+`<release>` is the chart fullname, as defined in the [chart README](../../deploy/helm/tastebuds-core/README.md).
 
 ### Reserved namespaces (to be filled by their modules)
 `auth.*`, `principal.*`, `db.*`

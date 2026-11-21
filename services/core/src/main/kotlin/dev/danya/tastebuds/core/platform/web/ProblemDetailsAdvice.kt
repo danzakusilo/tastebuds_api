@@ -17,8 +17,10 @@ import org.springframework.web.context.request.WebRequest
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler
 
 /**
- * Every error leaves as RFC 9457 problem+json. Unexpected errors never reveal internals, only a trace ID that support
- * can look up. The wide event records the error identity; the stack trace is logged once, correlated by trace ID.
+ * Turns exceptions from Spring MVC request handling into RFC 9457 problem+json. Responses written outside MVC (filters,
+ * Spring Security handlers) use [ProblemResponses]; the error responses that are not problem+json are listed under
+ * "Known gaps" in SECURITY.md. Unexpected errors never reveal internals, only a trace ID that support can look up. The
+ * wide event records the error identity; the stack trace is logged once, correlated by trace ID.
  */
 @RestControllerAdvice
 class ProblemDetailsAdvice : ResponseEntityExceptionHandler() {
