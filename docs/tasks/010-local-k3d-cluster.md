@@ -2,7 +2,7 @@
 
 - **Status:** READY
 - **Phase:** 1
-- **Planned by:** claude-opus-5-5 on 2026-11-21
+- **Planned by:** claude-opus-5-5 on 2026-11-21; amended by claude-opus-5-5 on 2026-11-21 after the spec audit
 - **Depends on:** 008, 009
 
 ## Goal
@@ -42,6 +42,11 @@ criterion.
 
 ## Design notes
 
+Notation: `<root>` and `<repo>` are the repository root (`git rev-parse --show-toplevel`, the `root` variable of
+`env.sh`); `<tool>` is `helm`, `kubectl` or `k3d`; `<os>` and `<arch>` come from §1; `<ns>` is a namespace argument;
+`<name>` is the Secret name of the step it appears in; `<pod>` is the primary pod found in §7 step 9; `<sql>` is a
+query from the step 9 table.
+
 ### 1. Pinned tools (`scripts/k8s/tools.sh`, executable)
 Installs missing pinned tools into `<repo>/.tools/bin` and prints that directory as its **only** stdout line
 (progress goes to stderr). Bash 3.2 compatible (macOS): no associative arrays, no `${x,,}`, no `mapfile`.
@@ -49,9 +54,13 @@ Installs missing pinned tools into `<repo>/.tools/bin` and prints that directory
   `arm64`). Anything else: error and exit 1.
 - A tool is current when `.tools/bin/<tool>` exists and `.tools/bin/.<tool>.version` contains the pinned version.
   Otherwise: download into a `mktemp -d` directory under `.tools/`, verify the SHA-256 (`sha256sum`, or
-  `shasum -a 256` on macOS), then `chmod 755` and `mv` into place, then write the stamp. On a mismatch: print expected
-  and actual hash, delete the download, exit 1. Never install an unverified file.
-- `curl -fsSL --proto '=https' --tlsv1.2 --retry 3`.
+  `shasum -a 256` on macOS), then `chmod 755` and `mv` into place, then write the stamp. On a mismatch: print
+  `checksum mismatch for <tool> <version> (<os>-<arch>): expected <sha256>, got <sha256>` to stderr, delete the
+  download, exit 1. Never install an unverified file. A `trap ... EXIT` removes the temporary directory on every exit
+  (success, mismatch, curl failure, Ctrl-C).
+- `curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 20 --speed-time 60 --retry 3`: `--speed-time 60` alone aborts
+  a download that moves less than 1 byte/s for 60 s (exit 28), and `--retry` retries timeouts. There is no total time
+  limit, because the download time depends on the link (see Limits).
 - Checksums come from this table (from the projects' official checksum files, 2026-11-21); look them up with a
   `case "$tool-$os-$arch"` function:
 
@@ -68,13 +77,21 @@ or changed." Defines:
 - `root` (`git rev-parse --show-toplevel`), `CLUSTER_NAME=tastebuds`, `KUBE_CONTEXT=k3d-tastebuds`,
   `NAMESPACE=tastebuds`.
 - `export KUBECONFIG="$root/.tools/kubeconfig"`; `export HELM_CONFIG_HOME="$root/.tools/helm/config"`,
-  `HELM_CACHE_HOME="$root/.tools/helm/cache"`, `HELM_DATA_HOME="$root/.tools/helm/data"`.
+  `HELM_CACHE_HOME="$root/.tools/helm/cache"`, `HELM_DATA_HOME="$root/.tools/helm/data"`;
+  `export KUBECACHEDIR="$root/.tools/kube-cache"` (kubectl and Helm otherwise write their API discovery cache to
+  `~/.kube/cache`, even with `KUBECONFIG` set).
 - `PATH="$("$root/scripts/k8s/tools.sh"):$PATH"` (pinned tools first, so a different system version never runs).
 - `kube() { kubectl --context "$KUBE_CONTEXT" "$@"; }` and `helm_local() { helm --kube-context "$KUBE_CONTEXT" "$@"; }`:
-  scripts call only these, never bare `kubectl`/`helm` against a cluster.
+  scripts call only these, never bare `kubectl`/`helm` against a cluster. Never wrap kubectl or helm in another
+  command (`timeout`, `env`, `xargs`, `command`): use the wrappers and the tools' own time-limit flags (`--timeout`,
+  `--request-timeout`). These two definitions are the only lines where `kubectl` or `helm` stands at command position
+  (AC 3 checks this; the check does not parse quotes, so a message that matches it is reworded).
 - `retry <attempts> <delay-seconds> <command...>`: runs the command until it succeeds, sleeping between attempts;
   returns the last exit code.
 - `require_docker`: `docker info` must succeed, else "Docker is not running" and exit 1.
+- `show_state <ns>`: diagnostics after a failed wait, all to stderr, never fails the caller (each command `|| true`):
+  `kube -n <ns> get pods -o wide` and the 20 newest events
+  (`kube -n <ns> get events --sort-by=.metadata.creationTimestamp | tail -n 20`). Task 011 uses it too.
 
 ### 3. k3d cluster (`deploy/k3d/cluster.yaml`)
 ```yaml
@@ -138,6 +155,8 @@ spec:
         name: tastebuds-db-migrator       # basic-auth, created by cluster-up.sh
       postInitApplicationSQL:
         # pgvector is untrusted: only the superuser may create it, once, before the first migration.
+        # The superuser owns it, so after an image change with a newer pgvector a superuser runs
+        # ALTER EXTENSION vector UPDATE (docs/deploy/LOCAL_CLUSTER.md) before the migrate Job; never a migration.
         - CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public
 ---
 apiVersion: postgresql.cnpg.io/v1
@@ -174,6 +193,10 @@ spec:
 `DatabaseRole` is CNPG's recommended standalone role resource (1.30). The operator retries `tastebuds_app` until
 `app_rw` exists; cluster-up waits for both to report `status.applied: true` before it returns, so the migration Job
 (V2 grants to `app_rw`) never races the roles.
+Extension upgrades: the extension owner is the superuser that ran `postInitApplicationSQL`; `migrator` gets "must be
+owner of extension vector". In this cluster the superuser is reached only through the instance pod (local socket,
+`enableSuperuserAccess: false`): `kube -n tastebuds exec <pod> -c postgres -- psql -d tastebuds -c 'ALTER EXTENSION
+vector UPDATE'`, after the image change and before the next migrate Job. Migrations never alter extensions.
 
 ### 6. Redis (`deploy/k8s/local/redis.yaml`, namespace `tastebuds`)
 Deployment `redis` (1 replica) and Service `redis` (ClusterIP, port 6379 → `redis`), labels
@@ -200,14 +223,24 @@ Deployment `redis` (1 replica) and Service `redis` (ClusterIP, port 6379 → `re
 5. **Secrets**, created only when missing (`kube -n "$NAMESPACE" get secret <name>` fails), never rotated by the
    script: `tastebuds-db-migrator` (username `migrator`) and `tastebuds-db-app` (username `tastebuds_app`), both
    `type: kubernetes.io/basic-auth`, labels `cnpg.io/reload: "true"` and `app.kubernetes.io/part-of: tastebuds`,
-   password `openssl rand -hex 32`. The manifest goes to `kube apply -f -` through a heredoc on **stdin** with
-   `stringData`: secrets never appear in argv, in output or on disk.
+   password `pw="$(openssl rand -hex 32)"`. The manifest (with `stringData`, values double-quoted) is written by the
+   bash builtin `printf` into a pipe: `printf '...' "$pw" | kube -n "$NAMESPACE" create -f -`. Secrets never appear
+   in argv (`printf` is a builtin, so no process gets the password as an argument), in output, or on disk.
+   - No heredoc or here-string: bash 3.2 (macOS) writes them to a temporary file in `$TMPDIR`.
+   - `create`, not `apply`: client-side `apply` stores its input, including `stringData` in plain text, in the
+     `kubectl.kubernetes.io/last-applied-configuration` annotation. `create` without `--save-config` stores no copy.
+     The script never updates these Secrets, so it never needs `apply`.
 6. **Postgres**: `retry 12 5 kube apply -f deploy/k8s/local/postgres.yaml` (the CNPG webhook may lag the operator's
    readiness by a few seconds).
 7. **Redis**: `kube apply -f deploy/k8s/local/redis.yaml`.
 8. **Wait**: `kube -n "$NAMESPACE" wait --for=condition=Ready cluster/tastebuds-db --timeout=600s`;
    `kube -n "$NAMESPACE" wait --for=jsonpath='{.status.applied}'=true databaserole/app-rw databaserole/tastebuds-app
    --timeout=300s`; `kube -n "$NAMESPACE" rollout status deployment/redis --timeout=180s`.
+   When a wait fails: run `show_state "$NAMESPACE"`, plus `kube -n "$NAMESPACE" get cluster tastebuds-db` after the
+   Cluster wait and `kube -n "$NAMESPACE" get databaserole app-rw tastebuds-app -o yaml` after the role wait. Then print
+   `<what> was not ready in <n> s. Image pulls and start-up continue in the cluster; run scripts/k8s/cluster-up.sh
+   again to keep waiting.` and exit 1. `<what>` is `Postgres cluster tastebuds-db`, `database roles` or
+   `Redis`; `<n>` is that wait's timeout.
 9. **Verify the database contract**: find the primary pod with
    `-l cnpg.io/cluster=tastebuds-db,cnpg.io/instanceRole=primary`, then run each query with
    `kube -n "$NAMESPACE" exec <pod> -c postgres -- psql -d tastebuds -tAc "<sql>"` and compare to the expected
@@ -218,11 +251,18 @@ Deployment `redis` (1 replica) and Service `redis` (ClusterIP, port 6379 → `re
 | database owner | `select pg_get_userbyid(datdba) from pg_database where datname = 'tastebuds'` | `migrator` |
 | migrator | `select concat(rolsuper::text, ',', rolcanlogin::text) from pg_roles where rolname = 'migrator'` | `false,true` |
 | app_rw | `select rolcanlogin::text from pg_roles where rolname = 'app_rw'` | `false` |
-| app login role | `select pg_has_role('tastebuds_app', 'app_rw', 'member')::text` | `true` |
+| app login role | `select concat(rolsuper::text, ',', rolcanlogin::text, ',', pg_has_role('tastebuds_app', 'app_rw', 'member')::text) from pg_roles where rolname = 'tastebuds_app'` | `false,true,true` |
 | pgvector | `select count(*) from pg_extension where extname = 'vector'` | `1` |
 
-10. Print: "Platform ready: Postgres tastebuds-db and Redis in namespace tastebuds." and the two lines that give the
-    user kubectl access (`export KUBECONFIG=<root>/.tools/kubeconfig`, `export PATH=<root>/.tools/bin:$PATH`).
+   The app login role row checks the DATABASE.md contract "LOGIN, member of `app_rw`, nothing else" as far as role
+   attributes go: not superuser, can log in, member of `app_rw`. A missing role gives empty output, which is a
+   mismatch.
+
+10. Print: "Platform ready: Postgres tastebuds-db and Redis in namespace tastebuds." and
+    "Use the cluster from bash: source <root>/scripts/k8s/env.sh, then kube ... and helm_local ... (docs/deploy/LOCAL_CLUSTER.md)."
+    Sourcing `env.sh` sets `KUBECONFIG`, `KUBECACHEDIR`, the three `HELM_*_HOME` variables and `PATH`, and defines the
+    wrappers.
+    Two printed `export` lines would leave Helm on the user's own configuration, so the script does not print them.
 
 Re-running the script on a ready cluster changes nothing and exits 0.
 
@@ -257,10 +297,20 @@ Append:
   127.0.0.1:6550, no Traefik); CloudNativePG 1.30.2 (`cnpg-system`); Postgres `tastebuds-db` (17.12 + pgvector, one
   instance, database `tastebuds` owned by `migrator`); roles `app_rw` and `tastebuds_app`; Redis 8.10 (no auth, no
   persistence); namespace `tastebuds` enforces the restricted Pod Security Standard.
-- Secrets: generated once, random, never printed or committed; names and keys.
-- Using kubectl and psql yourself (the two exports; `kubectl -n tastebuds exec -it tastebuds-db-1 -c postgres --
-  psql tastebuds`). The scripts never touch `~/.kube/config` or your Helm configuration.
-- Troubleshooting: port 6550 in use, Docker memory, start over with cluster-down then cluster-up.
+- Secrets: generated once, random, never printed or committed; names and keys. Deleting a Secret and re-running
+  cluster-up is not a rotation (the database keeps the old password): start over with cluster-down then cluster-up.
+- Using kubectl, helm and psql yourself: in bash, `source scripts/k8s/env.sh` from the repository root, then `kube` and
+  `helm_local` (for example `kube -n tastebuds exec -it tastebuds-db-1 -c postgres -- psql tastebuds`; the primary
+  pod is `tastebuds-db-1` on a fresh cluster). The scripts never touch `~/.kube/config` or your Helm configuration.
+- Extension upgrades: after a Postgres image change that brings a newer pgvector, run
+  `kube -n tastebuds exec tastebuds-db-1 -c postgres -- psql -d tastebuds -c 'ALTER EXTENSION vector UPDATE'` before
+  the next deploy (the superuser owns the extension; migrations never alter it).
+- What survives what (the user-visible rows of §13): cluster-down deletes the database, Redis and every Secret;
+  `.tools/` stays; deleting a `DatabaseRole` keeps the role in Postgres; Redis loses its data on every restart.
+- Troubleshooting: port 6550 in use, Docker memory, a wait that timed out on a slow first image pull (run cluster-up
+  again), Helm reports "another operation (install/upgrade/rollback) is in progress" for `cnpg` after an interrupted
+  run (`pending-upgrade`: `helm_local -n cnpg-system rollback cnpg`; `pending-install`: start over), start over with
+  cluster-down then cluster-up.
 - Local-only shortcuts that production must not copy: Redis without auth, one Postgres instance, no TLS verification.
 
 `docs/deploy/DATABASE.md`: in "Where each environment provisions them", replace the local k3d text with a link to
@@ -271,17 +321,84 @@ pgvector + two `DatabaseRole`s).
 Delete `docs/backlog/2026-11-15-app-rw-role-provisioning.md`: task 008 documented the roles and environment variables
 and runs Flyway as a separate process with `migrator`; this task provisions the roles in the local cluster.
 
+### 13. Lifecycle of what the scripts create
+| Object | Create | Re-run | Failure or interrupt | Removal |
+|---|---|---|---|---|
+| `.tools/bin/<tool>` and its stamp | `tools.sh`, after the checksum matches | kept while the stamp has the pinned version; a new pin replaces it | nothing installed; the `EXIT` trap removes the temporary directory | `rm -rf .tools` (cluster-down keeps it) |
+| k3d cluster (node and load-balancer containers, network) | `k3d cluster create` | `k3d cluster start` | k3d deletes the partial cluster when its timeout fires; pulled images stay in host Docker | cluster-down |
+| `.tools/kubeconfig` | `.tmp` then `mv`, `umask 077` | rewritten | the old file stays until the `mv` | cluster-down |
+| Helm release `cnpg` | `upgrade --install` | upgrade, no change | `failed` (timeout): the next run upgrades it. `pending-upgrade` (helm killed during a re-run): `helm_local -n cnpg-system rollback cnpg`, then cluster-up. `pending-install` (killed during the first run, before any database exists): cluster-down then cluster-up | with the cluster |
+| Secrets `tastebuds-db-migrator`, `tastebuds-db-app` | `create` when missing | never changed | the first exists and the second failed: the next run creates only the missing one | with the cluster |
+| Cluster `tastebuds-db` and its PVC | `apply` | `apply`, no change | wait timeout: diagnostics; pull, initdb and start-up continue | with the cluster; the data is lost |
+| `DatabaseRole` `app-rw`, `tastebuds-app` | `apply` | `apply`, no change | the operator retries | `databaseRoleReclaimPolicy: retain`: deleting the resource keeps the role in Postgres |
+| Redis | `apply` | `apply`, no change | wait timeout: diagnostics | with the cluster; `emptyDir` data is lost on every pod restart (rate-limit buckets reset; the limiter fails open while Redis is down) |
+
+## Assumptions verified
+"Audit" means the spec audit of 2026-11-21, which ran or read each item. No k3d cluster was created while planning, so
+every acceptance criterion that runs `kube` is UNVERIFIED until the implementer runs it.
+
+| Claim | How checked |
+|---|---|
+| The 12 checksums in §1 match the projects' checksum files | Audit (downloaded and hashed all 12). This amendment downloaded kubectl and Helm for linux-amd64 again: `sha256sum` equals the table |
+| Chart `cloudnative-pg` 0.29.2 ships operator 1.30.2; the `DatabaseRole` CRD has every field used, including `status.applied` | Audit |
+| The pinned CRDs-catalog commit has the Cluster and DatabaseRole schemas; `kubeconform -strict` passes `postgres.yaml` | Audit |
+| `postgresql:17.12-standard-trixie` exists for amd64 and arm64 and has pgvector 0.8.7, which is not trusted | Audit |
+| `postInitApplicationSQL` runs as superuser; with `initdb.secret` set, CNPG creates no `<cluster>-app` Secret | Audit |
+| The superuser owns `vector`; `ALTER EXTENSION vector UPDATE` as `migrator` fails with "must be owner of extension vector" | Audit (C8, pgvector 0.8.7 container) |
+| `rancher/k3s:v1.35.10-k3s1` exists; `k3d cluster get` exits 1 for a missing cluster | Audit |
+| `redis:8.10.3-alpine` runs as 999:1000 with protected mode off and starts read-only as non-root | Audit |
+| Helm 4 `--wait` with no value selects the watcher strategy | Audit (Helm 4.3 help) |
+| The §7 step 9 queries print exactly the expected strings, and the app login role row catches a superuser app role | Ran on `postgres:17` after the DATABASE.md bootstrap SQL: `false,true`, `false`, `false,true,true`; after `ALTER ROLE tastebuds_app SUPERUSER`: `true,true,true`; for a missing role: empty output |
+| The AC 3 `grep` finds bare calls at command position, ignores comments and plain mentions, and prints nothing on the current tree | Ran on the current tree: no output. Ran on simulated `env.sh`, `tools.sh` and `cluster-up.sh` from this spec plus a file with five bare-call forms (line start, `$(`, `if`, after `\|`, after `&&`): all five found; in the clean files only the two wrapper definitions match. Without `-H`, grep prints no file name when only `lint.sh` matches, so a `grep -v '^scripts/k8s/lint.sh:'` filter removes nothing |
+| bash 3.2 writes a heredoc to a temporary file; a pipe from the builtin `printf` stays a pipe | Ran `bash:3.2.57` and `bash:5.2.37`: heredoc stdin is `/tmp/sh-thd-… (deleted)` in 3.2 and a pipe in 5.2; `printf … \|` gives a pipe in both |
+| curl `--retry` retries timeouts (exit 28) with a 1 s, 2 s, 4 s backoff; `--speed-time` alone uses a 1 byte/s floor | curl 7.81 manual |
+| `kubectl create` without `--save-config` writes no `last-applied-configuration`; client-side `apply` writes its input there | Audit A6 (`create secret --save-config --dry-run=client -o yaml` shows the mechanism). Apply with `stringData` against a server: inferred. AC 4 checks that the annotation is absent |
+| UNVERIFIED: CNPG instance and initdb pods are admitted under `enforce: restricted` | Implementer checks first; pre-decided fallback in §4 |
+| UNVERIFIED: `k3d cluster start` on a running cluster changes nothing and exits 0 | Implementer checks first (AC 1, second run) |
+| UNVERIFIED: k3d's `timeout` also covers the first image pulls | Not relied on: a re-run starts with the images in host Docker (Limits) |
+| UNVERIFIED: `kube exec <pod> -c postgres -- psql` connects as superuser `postgres` over the local socket although `enableSuperuserAccess: false` | Implementer checks first; step 9 and the extension-upgrade command fail visibly if not |
+| UNVERIFIED: the operator's `DatabaseRole` retry interval | Not relied on: the role wait has its own timeout and prints the roles' status |
+| UNVERIFIED: kubectl v1.35.10 and Helm 4.3.2 put their discovery cache in `$KUBECACHEDIR` when it is set (both use the client library's default cache directory, `$HOME/.kube/cache` otherwise) | Implementer checks first with AC 3b. Pre-decided fallback if `.kube/cache` still appears: run `kube version` and `helm_local list -A` separately with a scratch home to find the writer; if only the cache is written, record it in a backlog item and narrow AC 3b to `find "$h" \( -path '*/.kube/config' -o -name helm \)` |
+| `find "$h" \( -name .kube -o -name helm \)` prints nothing for a clean home and finds `.kube` and `.cache/helm` | Ran on a scratch directory before and after creating those two directories |
+| UNVERIFIED: Helm 4.3.2 leaves a release `pending-install` or `pending-upgrade` when it is killed during `upgrade --install --wait`; `rollback` recovers `pending-upgrade`; `upgrade --install` upgrades a `failed` release | Docs and §13 only, no acceptance criterion depends on it |
+
+## Limits
+| Limit | Value | Wrapped by (must be larger) |
+|---|---|---|
+| curl, per download (`tools.sh`) | connect 20 s; abort after 60 s below 1 byte/s; 3 retries with 1 s, 2 s, 4 s backoff; no total limit (depends on the link: about 20 MB Helm, 60 MB kubectl, 25 MB k3d) | None: the user stops it with Ctrl-C; the `EXIT` trap removes the temporary directory |
+| k3d `options.k3d.timeout` (`wait: true`) | 180 s: node start and k3s ready | None. When it fires, k3d deletes the partial cluster; pulled images stay in host Docker, so a re-run is faster |
+| Node wait | 180 s | None |
+| CNPG operator `helm --wait --timeout 5m` | 300 s: operator image pull and readiness | None. When it fires, the release is `failed`, the pod keeps starting, and the next run upgrades the release |
+| `retry 12 5` around `kube apply postgres.yaml` | 12 attempts, 5 s apart (about 55 s plus the apply calls): the CNPG webhook starts serving a few seconds after the operator is Ready | None |
+| Cluster wait | 600 s: pull of the ~214 MiB Postgres image, initdb, first start | None. CNPG `startDelay` (instance start-up window, 3600 s default) is larger on purpose: the script does not wait for CNPG to fail. When the wait fires, the script prints diagnostics and exits 1; pull, initdb and start-up continue, and a re-run waits again |
+| `DatabaseRole` wait | 300 s | None. When it fires: diagnostics including both roles' status |
+| Redis rollout | 180 s | None. The Deployment's `progressDeadlineSeconds` (600 s default) is larger, so the wait fires first and `show_state` shows the cause (pull, crash loop, unready) |
+| Redis probes | readiness `redis-cli ping` every 5 s; liveness TCP every 10 s, restart after 3 failures | Redis rollout wait (first readiness) |
+| Redis memory | `--maxmemory 64mb` (`allkeys-lru`) | Container memory limit 128Mi (room for Redis overhead) |
+| `tastebuds_app` `connectionLimit` | 40 | Postgres `max_connections` (100 is the Postgres default; UNVERIFIED that CNPG keeps it) minus `migrator` and superuser sessions. Task 011's Limits check that the app's pools fit into 40 |
+
 ## Acceptance criteria
 1. On a machine with only Docker, git, curl and openssl, `scripts/k8s/cluster-up.sh` exits 0 and its verification
    step (§7 step 9) passes; a second run exits 0, keeps the same cluster, and leaves both Secrets unchanged (same
    `metadata.resourceVersion` before and after).
-2. `tools.sh` installs exactly the pinned versions and verifies every download against the table in §1; with a wrong
-   checksum it exits 1 and installs nothing (verify once locally by editing a checksum; do not commit that); its stdout
-   is the bin directory only.
-3. No script reads or writes `~/.kube/config` or the user's Helm configuration: every kubectl/helm call goes through
-   `kube`/`helm_local` with `KUBECONFIG=<repo>/.tools/kubeconfig` (`grep -nE '\b(kubectl|helm) ' scripts/k8s/*.sh`
-   shows only the two wrapper definitions and `tools.sh`).
-4. Secrets are created through stdin only; no password appears in the repository, in script output or in argv.
+2. `tools.sh` installs exactly the pinned versions and verifies every download against the table in §1; its stdout is
+   the bin directory only. Negative (verify once locally; do not commit the edit): remove `.tools/bin/helm` and
+   `.tools/bin/.helm.version`, change one character of the Helm checksum for your platform, run `tools.sh`. It exits
+   1, its stderr has the line `checksum mismatch for helm v4.3.2 (<os>-<arch>): expected <sha256>, got <sha256>` with
+   the edited value as expected and the real hash as got, and afterwards `.tools/bin/helm`, `.tools/bin/.helm.version`
+   and any temporary directory under `.tools/` do not exist. A curl failure gives a different message, so it cannot
+   pass this check.
+3. No script reads or writes `~/.kube/config` or the user's Helm configuration; every kubectl/helm call goes through
+   `kube`/`helm_local` with `KUBECONFIG=<repo>/.tools/kubeconfig`. Checks (GNU grep, Linux):
+   a. `grep -HnE '(^|[;&|({!]|\$\(|\b(if|then|do|else|elif|while|until|exec|time|command)[[:space:]])[[:space:]]*(kubectl|helm)([[:space:]]|$)' scripts/k8s/*.sh | grep -v '^scripts/k8s/lint.sh:'`
+      prints exactly two lines, both from `scripts/k8s/env.sh`: the `kube()` and the `helm_local()` definitions.
+      (`lint.sh` runs Helm in Docker for static checks and has no cluster access; `-H` keeps the file name on every
+      line.)
+   b. With a scratch home, `h="$(mktemp -d)"; DOCKER_CONFIG="$HOME/.docker" HOME="$h" scripts/k8s/cluster-up.sh`
+      exits 0, and afterwards `find "$h" \( -name .kube -o -name helm \)` prints nothing.
+4. Secrets are created through a `printf` pipe into `kube create -f -` only (no heredoc, no here-string, no `apply`);
+   no password appears in the repository, in script output, in argv or in a file. `kube -n tastebuds get secret
+   tastebuds-db-migrator tastebuds-db-app -o yaml | grep -c last-applied-configuration` prints `0`.
 5. All pods in namespace `tastebuds` are admitted under `enforce: restricted`, or the §4 fallback is applied and a
    backlog item names the violating field.
 6. `kube -n tastebuds exec deploy/redis -- redis-cli ping` prints `PONG`; the Redis pod runs as uid 999 with a
@@ -296,8 +413,12 @@ No automated test framework exists for these scripts; the checks below are requi
 (command plus the relevant output lines):
 - `scripts/k8s/lint.sh` (shellcheck covers `env.sh`, `tools.sh`, `cluster-up.sh`, `cluster-down.sh`; kubeconform covers
   the three manifests).
-- Two consecutive `scripts/k8s/cluster-up.sh` runs (AC 1), with the Secret `resourceVersion`s before and after.
-- The checksum-mismatch run of `tools.sh` (AC 2, negative).
+- Two consecutive `scripts/k8s/cluster-up.sh` runs (AC 1), with the Secret `resourceVersion`s before and after; the
+  step 9 output shows all five checks, including `false,true,true` for the app login role.
+- The checksum-mismatch run of `tools.sh` (AC 2, negative): its stderr line with both hashes, exit code 1, and
+  `ls -a .tools/bin .tools` showing no `helm`, no `.helm.version` and no temporary directory.
+- The AC 3a `grep` output (two `env.sh` lines) and the AC 3b scratch-home run with the empty `find` output.
+- The AC 4 `grep -c` output (`0`).
 - `kube -n tastebuds get pods` and `kube -n tastebuds get events --field-selector reason=FailedCreate` (AC 5, empty
   when no pod was rejected).
 - `redis-cli ping` (AC 6), then `scripts/k8s/cluster-down.sh` twice (AC 8).
