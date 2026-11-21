@@ -1,6 +1,6 @@
 # 008 — Run migrations as a separate `migrate` command with the non-superuser schema owner
 
-- **Status:** HANDOFF
+- **Status:** DONE
 - **Phase:** 1
 - **Planned by:** claude-opus-5-5 on 2026-11-21
 - **Depends on:** none
