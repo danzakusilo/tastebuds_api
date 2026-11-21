@@ -43,7 +43,9 @@ If a check fails, send the explainer the failure with SendMessage once; if it st
 2. Reality check verdict and findings, each with origin and recommendation. The user decides what happens next:
    - `simplify before merge` → only if the user agrees: a new implementer round on the task branch with the finding.
    - `backlog` → only if the user agrees: a `docs/backlog/` file, committed on its own branch, not on the PR branch.
-   - findings with origin `spec` are also a hint for the planner prompt; mention the pattern if it repeats.
+   - findings and gaps with origin `spec`: name the `docs/agentic/SPEC_CHECKLIST.md` rule that should have caught
+     each one, or propose a candidate line (a promotion to a rule if a candidate already matches). Change the
+     checklist only after a yes, on its own branch, not on the PR branch.
 3. The main idea titles and the brief's absolute path.
 4. Offer, and do only after a yes:
    - post the brief as a PR comment: `gh pr comment <n> --body-file build/pr-brief/pr-<n>.md`;

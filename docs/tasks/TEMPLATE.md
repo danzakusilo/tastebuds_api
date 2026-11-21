@@ -22,6 +22,21 @@
 <Interfaces, data shapes, key decisions already made by the planner, so the implementer doesn't have to make them.
  Include signatures for public types, table DDL, event schemas, config keys.>
 
+## Assumptions verified
+<!-- docs/agentic/SPEC_CHECKLIST.md rule 1. Each claim about tool, library or platform behaviour the design relies on,
+     and how the planner checked it. Mark a claim that could not be run "UNVERIFIED: implementer checks first".
+     Delete the section if there are none. -->
+| Claim | How checked |
+|---|---|
+| ... | ... |
+
+## Limits
+<!-- SPEC_CHECKLIST.md rule 4. Every timeout, deadline, retry budget or size limit the change sets or depends on,
+     including defaults of the tools that wrap it. Delete the section if there are none. -->
+| Limit | Value | Wrapped by (must be larger) |
+|---|---|---|
+| ... | ... | ... |
+
 ## Acceptance criteria
 <Numbered, each objectively checkable. The reviewer verifies every one.>
 1. ...

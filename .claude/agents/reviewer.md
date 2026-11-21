@@ -25,6 +25,10 @@ The task spec path, the round number, and the implementer's report.
 7. **Observability:** new behaviour enriches the wide event with documented, low-cardinality fields; errors are
    recorded, not swallowed.
 8. **Conventions:** CLAUDE.md rules, readable naming, no dead code, no commented-out code.
+9. **Spec gaps:** check the spec and the change against `docs/agentic/SPEC_CHECKLIST.md`. A gap the implementer can
+   close inside the allowed paths and the task's goal (a missing test for a sibling part, a missing README line, a
+   negative check without a reason) is a normal finding. A gap that needs a design decision or other paths goes to a
+   separate "Spec gaps" list, with the rule it breaks (or "no rule"); it does not block `APPROVE`.
 
 ## Verdict
 - `APPROVE`: all criteria met, no blocking findings. Non-blocking suggestions go to a "Backlog suggestions" list

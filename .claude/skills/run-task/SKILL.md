@@ -22,8 +22,8 @@ Argument: a task spec path or ID (e.g. `001` → `docs/tasks/001-*.md`).
 3. Run `scripts/agentic/task-meta.sh status <spec> IN_REVIEW`. Spawn the `reviewer` agent with: spec path, round number, implementer report.
 4. Append to the spec's `## Review log` by piping the text via stdin from a Bash heredoc:
    `scripts/agentic/task-meta.sh log <spec> - <<'EOF' … EOF`, where the text is `### Round N: <VERDICT>` followed by
-   the findings (or "none"). Do not write a temp file with Write/Edit: the hook blocks file-tool edits outside the repo.
-   Create `docs/backlog/` files for any "Backlog suggestions".
+   the findings (or "none") and the reviewer's "Spec gaps" (if any). Do not write a temp file with Write/Edit: the
+   hook blocks file-tool edits outside the repo. Create `docs/backlog/` files for any "Backlog suggestions".
 5. `APPROVE` → Handoff. `CHANGES_REQUESTED` → next round. `SPEC_PROBLEM` → Handoff.
 6. After round 3 without approval → Handoff with the open findings.
 
@@ -39,6 +39,9 @@ judgement. Your edits are limited to the spec's status and review log (via `task
   - acceptance criteria → evidence (from the final review)
   - `./gradlew check` result and coverage of the changed module
   - backlog items created
+  - spec gaps from the reviews and implementer deviations caused by a wrong spec: name the
+    `docs/agentic/SPEC_CHECKLIST.md` rule that should have caught each one, or propose a candidate line (a promotion if
+    a candidate already matches). Change the checklist only after a yes, on its own branch, never on the task branch.
   - a suggested commit message (Conventional Commits, referencing the task ID)
 - Do not commit, push or open a PR unless the user asks.
 - Once the PR is open, suggest `/brief-pr <PR#>` (reality check and review brief).
