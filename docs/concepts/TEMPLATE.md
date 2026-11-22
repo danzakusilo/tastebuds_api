@@ -20,7 +20,7 @@
 <Where it lives (links to files, no line numbers) and the values this repo chose.>
 
 ## Rejected
-<What the task spec or docs/PLAN.md records as considered and not chosen, and what it would have cost.
+<What the task spec, docs/PLAN.md or docs/challenges/ records as considered and not chosen, and what it would cost.
  If the record names nothing, write "Nothing recorded." A note of your own may follow, marked
  "Note, not from the record:". For a concept that was not a choice, write "Not a choice:" and why.>
 
