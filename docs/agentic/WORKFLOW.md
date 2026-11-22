@@ -10,6 +10,11 @@ strong one, with scope enforced by tooling rather than by trust. A human sees on
    ┌──────────────────┐   docs/tasks/NNN-slug.md (READY)
    │ planner  (Opus)  │──────────────────────────────┐
    └──────────────────┘                              │
+     ▲ │ each large decision                         │
+     │ ▼                                             │
+   challenger (Opus): argues for the alternative;    │
+   HOLDS / WEAK / OVERTURN, a question for the human │
+                                                     │
                                                      ▼
             ┌──────────────── run-task orchestrator (max 3 rounds) ────────────────┐
             │  .claude/active-task = spec  →  scope guard active for every agent   │
@@ -35,8 +40,10 @@ strong one, with scope enforced by tooling rather than by trust. A human sees on
 | `docs/tasks/NNN-*.md` | Task spec: goal, non-goals, **allowed paths**, design notes, acceptance criteria, required tests, gates, review log |
 | `docs/backlog/*.md` | Out-of-scope findings. Never fixed in place |
 | `docs/agentic/SPEC_CHECKLIST.md` | Rules the planner applies before READY and the reviewer checks: each one from a spec gap that reached a PR |
-| `.claude/agents/{planner,implementer,reviewer,explainer,cold-reader}.md` | Agent roles, models, tool limits |
-| `.claude/skills/{plan-task,run-task,brief-pr}/SKILL.md` | Orchestration entry points (`/plan-task`, `/run-task`, `/brief-pr`) |
+| `.claude/agents/{planner,challenger,implementer,reviewer,explainer,cold-reader}.md` | Agent roles, models, tool limits |
+| `.claude/skills/{plan-task,run-task,brief-pr,challenge}/SKILL.md` | Orchestration entry points (`/plan-task`, `/run-task`, `/brief-pr`, `/challenge`) |
+| `docs/challenges/*.md` | Which decisions are large, and one record per challenged decision: the alternative argued, its strongest point, the answer, the turning question and the owner's answer |
+| `build/challenge/*.md` | (git-ignored) Reply of the challenger from `/challenge <id>`, before the owner has answered |
 | `build/pr-brief/pr-N.md` | (git-ignored) Review brief of PR N from `/brief-pr`: three sentences, new concept cards, decisions, reading route, over-engineering check, teach-back questions |
 | `build/pr-brief/cards/*.md` | (git-ignored) Concept card drafts of a brief; committed to `docs/concepts/` after the PR is merged |
 | `docs/concepts/*.md` | Concept cards: one backend concept each, problem first and name third (rules and index in its README). `reader-seed.md` is the starting known-list |
@@ -61,6 +68,8 @@ compares against the merge base.
 
 ## Why these models
 - Planning and review are where judgement matters and mistakes compound, so they get the strongest model (Opus).
+- The challenger second-guesses a planner decision, which is judgement too, so it gets Opus. It gets the record of
+  the decision and not the planner's conversation, so it does not inherit the planner's reasoning.
 - The explainer judges over-engineering and explains a change to a human, so it also gets Opus. It runs in a fresh
   context, so it sees the change without the loop's history.
 - The cold reader only lists terms and looks them up in the known-list, so Sonnet is enough. It gets the text and
@@ -75,6 +84,8 @@ ArchUnit + Spring Modulith boundary verification + Kover coverage floor (70% glo
 
 ## Human checkpoints
 - Approving a planner spec (READY) when it raised open questions.
+- Answering the turning question when a challenge ends `WEAK` or `OVERTURN` and the planner keeps its decision.
+  The question is about the project, not about the technology, so it needs no backend knowledge.
 - Handoff: reading the diff and evidence, then committing / opening the PR.
 - After the PR is open: `/brief-pr <PR#>`, then deciding on its reality-check findings (simplify, backlog or keep),
   on a split when the PR needs more than two new concepts, and whether to post the brief as a PR comment.
