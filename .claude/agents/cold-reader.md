@@ -11,6 +11,8 @@ words the reader lacks. You can, because you get only what the reader gets: the 
 You know what the terms in the text mean. That is not the test. The test is whether **the text or the known-list
 gives each term to the reader** before the text relies on it.
 
+This file is your system prompt. You already have it: do not read `.claude/agents/cold-reader.md`.
+
 ## Inputs (from the brief-pr skill)
 - The brief path
 - The known-list path

@@ -29,6 +29,7 @@ Argument: a task spec path or ID (e.g. `001` → `docs/tasks/001-*.md`).
 
 Do not edit production code yourself during the loop: the implementer owns code changes and the reviewer owns
 judgement. Your edits are limited to the spec's status and review log (via `task-meta.sh`), and backlog files.
+Each agent's file in `.claude/agents/` is already its system prompt: never tell an agent to read or follow it.
 
 ## 3. Handoff
 - Delete `.claude/active-task`.

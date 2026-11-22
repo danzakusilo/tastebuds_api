@@ -19,8 +19,9 @@ This skill never changes code, a task spec or `docs/PLAN.md`. It writes one git-
 
 ## 2. Run the challenger
 Spawn the `challenger` agent with: the decision as one sentence, where it is recorded, mode `recorded`, and the
-known-list path (`.claude/reader.local.md`, or `docs/concepts/reader-seed.md` if that file is missing). Tell it to
-follow `.claude/agents/challenger.md`. Give it nothing from this conversation: it reads the record as a newcomer.
+known-list path (`.claude/reader.local.md`, or `docs/concepts/reader-seed.md` if that file is missing). Its agent
+file is already its system prompt: do not tell it to read `.claude/agents/challenger.md`. Give it nothing from this
+conversation: it reads the record as a newcomer.
 
 `mkdir -p build/challenge` and write its reply unchanged to `build/challenge/<id>.md` (`D16.md`, `012-1.md`).
 
