@@ -33,7 +33,8 @@ drafts, and the reader's known-list.
 ## 2. Run the explainer
 Spawn the `explainer` agent with: PR number, URL, title, base branch, head SHA, CI status, spec path (or "none"),
 known-list path, source mode, blob URL base `https://github.com/<owner>/<repo>/blob/<sha>/`, the brief path and the
-cards directory. Tell it to follow `.claude/agents/explainer.md`. Wait for its reply.
+cards directory. Its agent file is already its system prompt: do not tell it to read `.claude/agents/explainer.md`.
+Wait for its reply.
 
 ## 3. Check the brief
 Checks of your own:

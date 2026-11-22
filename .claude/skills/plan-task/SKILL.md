@@ -6,8 +6,8 @@ description: Turn a feature request, PLAN.md phase item, or backlog file into a 
 # plan-task
 
 1. Make sure no task is active (`.claude/active-task` absent). If one is, ask the user whether to finish it first.
-2. Spawn the `planner` agent with the user's request verbatim (or the backlog/PLAN reference) and the instruction to
-   follow `.claude/agents/planner.md`.
+2. Spawn the `planner` agent with the user's request verbatim (or the backlog/PLAN reference). Its agent file is
+   already its system prompt: do not tell it to read or follow `.claude/agents/planner.md`.
 3. Relay the planner's open questions to the user before marking anything READY. Once answered, send them to the
    planner with SendMessage so it can finalize the spec.
 4. Challenge the large decisions (the list is in `docs/challenges/README.md`). The planner's reply names them; the
