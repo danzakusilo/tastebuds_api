@@ -12,6 +12,18 @@
 <Things a reasonable implementer might be tempted to do, explicitly out of scope.>
 - ...
 
+## Decisions
+<!-- Choices someone could reasonably have made differently. Names, class structure and internal helpers are not
+     decisions; they stay in Design notes. "Large" is defined in docs/challenges/README.md. A large decision is
+     challenged before the spec is READY and the result is recorded here. Delete the section if there are none. -->
+### Decision 1: <the decision as one plain sentence>
+- **Size:** large (<which point of the list>) | local
+- **Why:** <1 to 3 sentences>
+- **Rejected:** <what was considered and not chosen, and what it would have cost; or "nothing else considered">
+- **Wrong if:** <when to revisit: a number, an event, a change in how the service runs>
+- **Challenge:** <for a large decision, filled in by /plan-task: verdict, the alternative argued, its strongest
+  point, the answer to it, the turning question, who answered it and when. For a local one: "not challenged">
+
 ## Allowed paths
 <!-- One glob per line in backticks. `*` also matches `/`. The task file and docs/backlog/** are always allowed.
      Anything not listed is blocked by .claude/hooks/scope-guard.sh and flagged by scripts/agentic/scope.sh. -->

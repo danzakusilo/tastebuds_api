@@ -24,8 +24,8 @@ A concept that is not on the known-list counts as unknown. The author does not j
    (linked at first use). If it needs another unknown concept, that concept gets its own card first.
 3. **One concept, as used here.** A card explains what this repo does with the concept, with this repo's numbers. It
    is not an introduction to the whole technology.
-4. **Nothing invented.** "Rejected" holds what the task spec or `docs/PLAN.md` records. If they record nothing, the
-   card says so. A note by the author is allowed when it is marked as one.
+4. **Nothing invented.** "Rejected" holds what the task spec, `docs/PLAN.md` or `docs/challenges/` records. If they
+   record nothing, the card says so. A note by the author is allowed when it is marked as one.
 5. **A comparison says where it breaks.** "In your world" names the point where the comparison stops holding.
 6. **Short.** A card takes about three minutes to read: 500 words, 600 at most, not counting link targets.
 7. **Kept true.** A change that alters what a card says updates the card, and its "Checked against" line.

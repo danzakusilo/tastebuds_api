@@ -28,7 +28,8 @@ scripts/agentic/scope.sh diff docs/tasks/NNN-x.md     # check a diff against a t
 - `libs/observability/`: wide events (`WideEvent`, `WideEventFilter`), error fingerprints, OTLP log bridge. Auto-configured.
 - `services/core/`: modular monolith (Spring Modulith). Top-level packages under `dev.danya.tastebuds.core` are modules;
   `platform` holds cross-cutting config (roles, security, error handling). Runs as role `api`, `worker` or `all`.
-- `deploy/`: compose (local observability), later Helm/k8s. `docs/`: plan, tasks, backlog, security, observability, concepts.
+- `deploy/`: compose (local observability), later Helm/k8s.
+- `docs/`: plan, tasks, backlog, security, observability, concepts, challenges.
 
 ## Conventions
 - **Kotlin**, Java 21, Spring Boot 4 (Jackson 3: `tools.jackson.*`), virtual threads. Compiler warnings are errors.
