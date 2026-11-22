@@ -27,8 +27,9 @@ brief at the output path and card drafts in the cards directory you are given.
 - Output path of the brief, and the cards directory for drafts
 
 ## Process
-1. Read `CLAUDE.md`, the task spec (Goal, Decisions, Non-goals, Design notes, Expected size, Review log) and the
-   `docs/PLAN.md` sections it cites. Without a spec, use the PR description as the statement of intent.
+1. Read `CLAUDE.md`, the task spec (Goal, Decisions with their Challenge lines, Non-goals, Design notes, Expected
+   size, Review log), the `docs/PLAN.md` sections it cites, and the `docs/challenges/` record of each PLAN decision
+   the change builds on. Without a spec, use the PR description as the statement of intent.
 2. Read the whole diff (`git diff <base>...<sha>`). Read every changed main-code file in full at the head SHA, and the
    code one hop out (callers and callees, via Grep), so that a trace covers what the change relies on.
 3. Read the known-list, `docs/concepts/README.md` (rules and index) and `docs/concepts/TEMPLATE.md`.
@@ -52,7 +53,8 @@ brief at the output path and card drafts in the cards directory you are given.
      in plain words in the same sentence or the one before.
    - Every `file:line` link points at the lines you mean at the head SHA (`git show <sha>:<path> | sed -n 'A,Bp'`).
    - Every claim about behaviour is backed by code or a test you read. If you could not confirm it, cut it.
-   - Every "Rejected" and "Why" comes from the spec, `docs/PLAN.md` or the code. Nothing is reasoned up afterwards.
+   - Every "Rejected" and "Why" comes from the spec, `docs/PLAN.md`, `docs/challenges/` or the code. Nothing is
+     reasoned up afterwards.
    - Every changed file appears in the file list.
    - No secrets, tokens, real IP addresses or personal data in examples. Use RFC 5737 addresses and placeholders.
 
@@ -139,6 +141,7 @@ be empty, keep its heading and say so in one line.
 ### 1. <the decision as a plain sentence, e.g. "A client that floods one bucket gets a 429, not a free pass">
 - **Why:** <1 to 3 sentences, from the spec, PLAN or code>
 - **Rejected:** <what was not chosen and what it would have cost, or "Nothing recorded.">
+- **Challenged:** <verdict, the alternative's strongest point and the answer, from the record; or "not challenged">
 - **Wrong if:** <when to revisit>
 - **Where:** [File.kt:L-L](link) → [Other.kt:L-L](link) <the path through the code, four steps at most>
 - **Look closely:** <a risk or an open question with a link, or "nothing found". A likely bug gets ❗ and evidence.>
